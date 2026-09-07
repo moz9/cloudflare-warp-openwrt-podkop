@@ -212,7 +212,11 @@ return view.extend({
             const switchTab = function(which) {
                 root.hidden=which!=='main'; tester.hidden=which!=='test';
                 const saveActions=document.querySelector('.cbi-page-actions');
-                if(saveActions) saveActions.hidden=which!=='main';
+                if(saveActions) {
+                    saveActions.hidden=which!=='main';
+                    if(which==='main') saveActions.style.removeProperty('display');
+                    else saveActions.style.setProperty('display','none','important');
+                }
             };
             const tabs = E('div', {style:'display:flex;gap:8px;margin:12px 0'}, [
                 E('button',{class:'btn',click:function(){switchTab('main');}},'Подключение'),
