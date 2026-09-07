@@ -30,7 +30,7 @@ an old-version migration guard. Only fixed actions are accepted by rpcd.
 
 `warp-limit` places a subprocess in a separate session, bounds registration and
 scan duration, sends TERM then KILL to the owned process group. Scanner workers
-are sequential by default with GOMAXPROCS=1 and a 40 MiB Go heap target. This is
+are sequential by default with GOMAXPROCS=1 and a 24 MiB Go heap target. This is
 a soft heap target, not a hard RSS limit. Standalone preflight tests must still
 check available RAM and sustained CPU usage.
 
@@ -46,7 +46,9 @@ unrelated subscriptions. A full Podkop reload still interrupts connections.
 
 The installer skips byte-identical backends, checks space before changing
 services, backs up only selected package files (never directories), and restores
-their individual opkg records on failure. Existing UCI conffiles belong to the
+their individual opkg records on failure. APK rollback uses native package
+transactions with pre-fetched previous packages rather than replacing the global
+package database. Existing UCI conffiles belong to the
 user and are not overwritten by rollback. Two completed snapshots are retained;
 incomplete recovery snapshots require manual inspection. Registration and AWG
 configuration are included in sysupgrade's keep list, not public packages.
@@ -89,3 +91,13 @@ PID plus process-start stamp distinguishes an interrupted worker from PID reuse.
 IPK generation versions the view's filename and menu path because some LuCI
 themes override `resource_version` with a constant, retaining stale JavaScript
 across upgrades. The public page URL remains unchanged.
+
+## Complete installation (0.1.5)
+
+The public `i` entrypoint downloads and syntax-checks the installer. It detects
+opkg/APK, installs missing dependencies, verifies release checksums and payloads,
+and then invokes `warp-setup`. Setup prepares the ZeroTier WARP interface
+blacklist with backups, registers and probes WARP, and attaches an empty Podkop
+section. Existing configured but intentionally stopped installations stay stopped.
+A setup failure is reported separately from successful package installation.
+Repeated installation preserves credentials and skips identical backend packages.
