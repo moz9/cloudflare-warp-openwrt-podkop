@@ -1,0 +1,113 @@
+#!/bin/sh
+# Complete a first installation; updates preserve an intentionally stopped tunnel.
+set -eu
+umask 077
+. /usr/libexec/warp-common
+fail() { echo "CF WARP setup: $*" >&2; exit 1; }
+json_ok() { [ "$(printf '%s' "$1" | jsonfilter -e '@.ok')" = true ]; }
+
+prepare_zerotier() (
+    [ -x /etc/init.d/zerotier ] || return 0
+    command -v jq >/dev/null || fail 'jq is required for ZeroTier coexistence'
+    prefix=$(uci -q get warp.main.interface || echo warp)
+    printf '%s' "$prefix" | grep -Eq '^[A-Za-z_][A-Za-z0-9_]{0,14}$' || fail 'Invalid interface prefix'
+    ztconf=$(uci -q get zerotier.global.local_conf_path || true)
+    [ -n "$ztconf" ] || ztconf=/var/lib/zerotier-one/local.conf
+    ztconf=$(readlink -f "$ztconf") || fail 'Cannot resolve ZeroTier configuration'
+    case "$ztconf" in *[[:space:]]*) fail 'Unsupported ZeroTier configuration path';; esac
+    # The legacy support helper copies its template on every restart, so both
+    # copies must retain the exclusion. Do not touch network membership/identity.
+    ztdir=/etc/warp/backups/zerotier-$(date +%Y%m%d-%H%M%S)-$$
+    mkdir -p "$ztdir"
+    paths="$ztconf"
+    template=/usr/libexec/zerotier-support/zerotier-router-support.conf
+    [ ! -f "$template" ] || [ "$template" = "$ztconf" ] || paths="$paths $template"
+    written=0
+    was_running=0
+    complete=0
+    cleanup_zt() {
+        rc=$?
+        trap - EXIT HUP INT TERM
+        if [ "$complete" = 0 ] && [ "$written" -gt 0 ]; then
+            i=0
+            for target in $paths; do
+                i=$((i+1)); [ "$i" -le "$written" ] || break
+                if cmp -s "$target" "$ztdir/$i.new"; then cp -p "$ztdir/$i.old" "$target" || true; fi
+            done
+            [ "$was_running" = 0 ] || /etc/init.d/zerotier restart || true
+        fi
+        for target in $paths; do rm -f "$target.warp-$$"; done
+        exit "$rc"
+    }
+    trap cleanup_zt EXIT
+    trap 'exit 1' HUP INT TERM
+    changed=0
+    n=0
+    for file in $paths; do
+        n=$((n+1))
+        [ -f "$file" ] || fail "ZeroTier local.conf is missing: $file"
+        cp -p "$file" "$ztdir/$n.old"
+        jq --arg prefix "$prefix" '
+          if type != "object" then error("invalid local.conf") else . end |
+          .settings = (.settings // {}) |
+          if (.settings|type) != "object" then error("invalid settings") else . end |
+          if ((.settings.interfacePrefixBlacklist // [])|type) != "array" then error("invalid blacklist") else . end |
+          .settings.interfacePrefixBlacklist = ((.settings.interfacePrefixBlacklist // []) + [$prefix] | unique)
+        ' "$file" > "$ztdir/$n.new" || fail 'Invalid ZeroTier configuration; no files changed'
+        if [ "$(jq -cS . "$file")" != "$(jq -cS . "$ztdir/$n.new")" ]; then changed=1; fi
+    done
+    [ "$changed" = 1 ] || { complete=1; rm -rf "$ztdir"; exit 0; }
+    /etc/init.d/zerotier status >/dev/null 2>&1 && was_running=1 || true
+    n=0
+    for file in $paths; do
+        n=$((n+1))
+        cmp -s "$file" "$ztdir/$n.old" || fail 'ZeroTier configuration changed concurrently'
+    done
+    n=0
+    for file in $paths; do
+        n=$((n+1)); cp -p "$file" "$file.warp-$$"
+        cat "$ztdir/$n.new" > "$file.warp-$$"
+        cmp -s "$file" "$ztdir/$n.old" || fail 'ZeroTier configuration changed concurrently'
+        written=$n
+        mv "$file.warp-$$" "$file"
+    done
+    if [ "$was_running" = 1 ]; then
+        echo 'Applying WARP interface exclusion to ZeroTier (one restart).'
+        if ! /etc/init.d/zerotier restart; then
+            fail "ZeroTier restart failed; rolling back configuration: $ztdir"
+        fi
+    fi
+    complete=1
+)
+
+main() {
+    warp_operation_acquire || fail 'Another WARP operation is active'
+    [ -z "$(uci changes)" ] || fail 'Save pending LuCI changes first'
+    configured=0
+    [ ! -s /etc/warp/awg.conf ] || configured=1
+    if [ -e /etc/warp/disabled ] || { [ "$configured" = 1 ] && ! /etc/init.d/warp status >/dev/null 2>&1; }; then
+        echo 'Updated. Existing stopped WARP and its autostart settings were preserved.'
+        return 0
+    fi
+    if [ "$configured" = 0 ]; then
+        prepare_zerotier
+        echo 'Registering WARP and finding a direct working endpoint (may take several minutes).'
+        result=$(/usr/libexec/warp-manager enable)
+        json_ok "$result" || fail "Connection incomplete: $(printf '%s' "$result" | jsonfilter -e '@.code'). Rerun the installer to retry."
+    fi
+    iface=$(uci -q get warp.main.actual_interface)
+    /usr/libexec/warp-probe "$iface" >/dev/null || fail 'WARP HTTPS verification failed'
+    if [ -f /etc/config/podkop ]; then
+        if uci -q get podkop.cfwarp >/dev/null; then
+            [ "$(uci -q get podkop.cfwarp.warp_managed)" = luci-app-warp ] &&
+            [ "$(uci -q get podkop.cfwarp.interface)" = "$iface" ] || fail 'Existing cfwarp section belongs to another configuration; it was preserved'
+        fi
+        result=$(/usr/libexec/warp-podkop attach)
+        json_ok "$result" || fail "Podkop setup incomplete: $(printf '%s' "$result" | jsonfilter -e '@.code')"
+        echo 'Ready: Services -> Cloudflare WARP. Run autotune and choose lists in Podkop section cfwarp.'
+    else
+        echo 'WARP connected. Podkop is not installed, so no Podkop section was created.'
+    fi
+}
+[ "${WARP_SETUP_LIBRARY:-0}" != 1 ] || return 0
+main "$@"

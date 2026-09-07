@@ -252,11 +252,11 @@ ensure_account() {
 		return
 	fi
 	temp_account="$STATE_DIR/.awg-account.$$"
-	if ! GOMAXPROCS=1 GOMEMLIMIT=40MiB NO_COLOR=1 /usr/libexec/warp-limit 120 "$SCOUT_BIN" register --plain --relay none \
+	if ! GOMAXPROCS=1 GOMEMLIMIT=24MiB NO_COLOR=1 /usr/libexec/warp-limit 120 "$SCOUT_BIN" register --plain --relay none \
 		--account "$temp_account" --gen-i1 quic --i1-sni "$CFG_SNI" \
 		>"$BACKEND_LOG" 2>&1; then
 		rm -f -- "$temp_account"
-		if ! GOMAXPROCS=1 GOMEMLIMIT=40MiB NO_COLOR=1 /usr/libexec/warp-limit 120 "$SCOUT_BIN" register --plain --relay none \
+		if ! GOMAXPROCS=1 GOMEMLIMIT=24MiB NO_COLOR=1 /usr/libexec/warp-limit 120 "$SCOUT_BIN" register --plain --relay none \
 			--account "$temp_account" >>"$BACKEND_LOG" 2>&1; then
 			emit_error 'awg_registration_failed'
 		fi
@@ -365,7 +365,7 @@ run_endpoint_scan() {
 	[ -z "$scan_targets" ] || set -- "$@" --target "$scan_targets"
 	[ -z "$CFG_EXCLUDE_COUNTRIES" ] || set -- "$@" --exclude-country "$CFG_EXCLUDE_COUNTRIES"
 	[ -z "$CFG_EXCLUDE_NODES" ] || set -- "$@" --exclude-node "$CFG_EXCLUDE_NODES"
-	GOMAXPROCS=1 GOMEMLIMIT=40MiB NO_COLOR=1 /usr/libexec/warp-limit 180 "$SCOUT_BIN" "$@" >>"$BACKEND_LOG" 2>&1 &&
+	GOMAXPROCS=1 GOMEMLIMIT=24MiB NO_COLOR=1 /usr/libexec/warp-limit 180 "$SCOUT_BIN" "$@" >>"$BACKEND_LOG" 2>&1 &&
 		[ -s "$temp_full_config" ]
 }
 

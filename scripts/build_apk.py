@@ -30,4 +30,6 @@ for name,ver,arch,deps in [
  packages.append(path)
  print(path.name,path.stat().st_size)
 (OUT/'FILES.sha256').write_bytes((ROOT/'dist-podkop/FILES.sha256').read_bytes())
+(OUT/'INSTALL-SIZES').write_bytes((ROOT/'dist-podkop/INSTALL-SIZES').read_bytes())
+packages.extend([OUT/'FILES.sha256', OUT/'INSTALL-SIZES'])
 (OUT/'SHA256SUMS-APK').write_text(''.join(hashlib.sha256(p.read_bytes()).hexdigest()+'  '+p.name+'\n' for p in sorted(packages)),encoding='ascii',newline='\n')
