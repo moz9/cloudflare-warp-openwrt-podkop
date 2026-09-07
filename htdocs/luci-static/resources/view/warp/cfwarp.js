@@ -7,6 +7,15 @@
 'require view';
 
 const statusRPC = rpc.declare({ object: 'luci.warp', method: 'status' });
+const testStatusRPC = rpc.declare({ object: 'luci.warp', method: 'test_status' });
+const testStartRPC = rpc.declare({ object: 'luci.warp', method: 'test_start', params: ['minutes', 'services'] });
+const testStopRPC = rpc.declare({ object: 'luci.warp', method: 'test_stop' });
+const testProfiles = [
+    ['google', 'Google', true], ['google_ai', 'Google AI / Gemini', true],
+    ['chatgpt', 'ChatGPT / OpenAI', true], ['youtube', 'YouTube', true],
+    ['google_play', 'Google Play', false], ['discord', 'Discord', false],
+    ['telegram', 'Telegram', false], ['cloudflare', 'Cloudflare', false]
+];
 const actions = {};
 ['enable', 'disable', 'reconnect', 'check', 'attach'].forEach(function(a) {
     actions[a] = rpc.declare({ object: 'luci.warp', method: a });
@@ -20,6 +29,9 @@ const errors = {
     pending_uci_changes: 'Сначала сохраните или отмените несохранённые изменения LuCI.',
     operation_in_progress: 'Операция уже выполняется.',
     podkop_busy: 'Podkop обновляет подписки или DNS. Повторите после завершения операции.',
+    test_busy: 'Проверка уже выполняется.',
+    invalid_duration: 'Выберите 15, 30, 45 или 60 минут.',
+    invalid_selection: 'Выберите хотя бы один сервис.',
     data_plane_unavailable: 'Проверка HTTPS через WARP не прошла.',
     endpoint_scan_failed: 'Рабочий узел не найден. Попробуйте другое маскирующее имя.',
     awg_registration_failed: 'Не удалось зарегистрировать WARP.',
@@ -41,6 +53,76 @@ const done = {
 function message(code) { return errors[code] || done[code] || code || '—'; }
 
 return view.extend({
+    renderTester: function() {
+        this.testChoices = testProfiles.map(function(p) {
+            return E('input', { type: 'checkbox', value: p[0], checked: p[2] || null });
+        });
+        this.testDuration = E('select', { 'aria-label': 'Продолжительность проверки' }, [15,30,45,60].map(function(m) {
+            return E('option', {value: String(m)}, m + ' минут');
+        }));
+        this.testProgress = E('p', {'aria-live': 'polite'}, 'Проверка ещё не запускалась.');
+        this.testRows = E('tbody');
+        this.testStart = E('button', {class:'btn cbi-button-action', click:L.bind(function() {
+            const selection = this.testChoices.filter(function(c) {return c.checked;}).map(function(c) {return c.value;}).join(',');
+            if (!selection) {ui.addNotification(null, E('p', errors.invalid_selection), 'error'); return;}
+            return this.testAction(function() {return testStartRPC(Number(this.testDuration.value), selection);}.bind(this));
+        },this)}, 'Начать проверку');
+        this.testStop = E('button', {class:'btn', disabled:true, click:L.bind(function() {
+            return this.testAction(testStopRPC);
+        },this)}, 'Остановить');
+        return E('div', {}, [
+            E('h2', {}, 'Проверка стабильности CF WARP'),
+            E('p', {}, 'Проверяет текущий узел в течение выбранного времени. Работает в фоне при закрытой странице, не меняет списки Podkop и не перезапускает службы.'),
+            E('p', {}, 'Профили соответствуют крупным сервисам из списков Podkop; Google и ChatGPT — дополнительные профили. Проверяются основные адреса, а не каждый домен списка.'),
+            E('div', {style:'display:flex;flex-wrap:wrap;gap:16px;margin:16px 0'}, testProfiles.map(L.bind(function(p,i) {
+                return E('label', {style:'display:flex;gap:6px;align-items:center'}, [this.testChoices[i], p[1]]);
+            },this))),
+            E('div', {style:'display:flex;flex-wrap:wrap;gap:12px;align-items:center'}, [this.testDuration,this.testStart,this.testStop]),
+            this.testProgress,
+            E('div', {style:'overflow-x:auto'}, E('table', {class:'table'}, [
+                E('thead', {}, E('tr', {}, ['Сервис','Успешные HTTP','Ограничения / вход','Ошибки','Задержка: обычная / 95%','Последний ответ'].map(function(t) {return E('th',{},t);}))),
+                this.testRows
+            ])),
+            E('p', {}, 'Успешные HTTP — ответы 2xx/3xx, включая перенаправления на вход. Ответы 401, 403 и 429 показаны отдельно: возможны вход в аккаунт, антибот, региональный запрет или лимит запросов. Это не подтверждение работы чата или воспроизведения видео.'),
+            E('p', {}, 'Небольшие HTTPS-запросы выполняются по очереди, обычно раз в минуту. Тест не скачивает видео и не измеряет предельную скорость. Смена или восстановление туннеля завершает текущую проверку; результат хранится до нового запуска или перезагрузки роутера.')
+        ]);
+    },
+    testAction: function(fn) {
+        this.testPending = true; this.testStart.disabled = true; this.testStop.disabled = true;
+        return fn().then(L.bind(function(result) {
+            if (!result || !result.ok) ui.addNotification(null,E('p',message(result && result.code)),'error');
+            if (result && result.code === 'stopping') this.testProgress.textContent = 'Останавливается после текущего запроса, до 8 секунд…';
+            return this.refreshTest();
+        },this)).catch(function(err) {ui.addNotification(null,E('p',err.message),'error');})
+            .finally(L.bind(function() {this.testPending=false; this.refreshTest();},this));
+    },
+    refreshTest: function() {
+        if (!this.testProgress) return Promise.resolve();
+        return testStatusRPC().then(L.bind(function(s) {
+            const running = s.state === 'running' || s.state === 'stopping';
+            const labels = {idle:'Проверка ещё не запускалась',running:'Проверка идёт',stopping:'Останавливается, до 8 секунд',complete:'Проверка завершена',stopped:'Остановлена',interrupted:'Прервана',changed:'Завершена: туннель изменился'};
+            const elapsed = running ? Math.max(s.elapsed || 0, Math.floor(Date.now()/1000)-(s.started_at || Date.now()/1000)) : (s.elapsed || 0);
+            const duration = Number(s.minutes || 0)*60;
+            const time = Math.floor(Math.min(elapsed,duration)/60) + ':' + String(Math.min(elapsed,duration)%60).padStart(2,'0');
+            this.testProgress.textContent = (labels[s.state] || 'Не удалось получить состояние') +
+                (duration ? ' · ' + time + ' из ' + s.minutes + ' мин · кругов: ' + (s.round || 0) +
+                ' · проверок выхода WARP: ' + (s.warp_checks || 0) + ', сбоев: ' + (s.warp_failures || 0) : '');
+            this.testStart.disabled = running || !!this.testPending;
+            this.testStop.disabled = !running || s.state === 'stopping' || !!this.testPending;
+            this.testDuration.disabled = running;
+            this.testChoices.forEach(function(c) {c.disabled=running; if(running)c.checked=(','+s.selection+',').includes(','+c.value+',');});
+            if (running) this.testDuration.value=String(s.minutes);
+            const names = Object.fromEntries(testProfiles.map(function(p) {return [p[0],p[1]];}));
+            const last = {ok:'Ответ получен',restricted:'Ограничение / вход',dns:'Ошибка DNS',network:'Ошибка соединения',http:'Ошибка HTTP'};
+            this.testRows.replaceChildren.apply(this.testRows,(s.services || []).map(function(r) {
+                const errors = r.dns+r.network+r.http;
+                return E('tr',{},[names[r.id] || r.id,r.good+' / '+r.total,String(r.restricted),
+                    errors+' (DNS '+r.dns+', связь '+r.network+', HTTP '+r.http+')',
+                    r.median_ms+' / '+r.p95_ms+' мс',(last[r.last] || r.last)+(r.http_code && r.http_code !== '000' ? ' · '+r.http_code : '')
+                ].map(function(t) {return E('td',{},t);}));
+            }));
+        },this));
+    },
     load: function() { return Promise.all([statusRPC(), uci.load('warp')]); },
     run: function(action) {
         this.localBusy = true;
@@ -122,8 +204,16 @@ return view.extend({
                 E('p', {}, 'При первом подключении создаётся регистрация WARP. Отключение туннеля останавливает доступ для сайтов, направленных в него; их списки сохраняются.'),
                 settings
             ]);
+            const tester = this.renderTester();
+            tester.hidden = true;
+            const switchTab = function(which) {root.hidden=which!=='main'; tester.hidden=which!=='test';};
+            const tabs = E('div', {style:'display:flex;gap:8px;margin:12px 0'}, [
+                E('button',{class:'btn',click:function(){switchTab('main');}},'Подключение'),
+                E('button',{class:'btn',click:function(){switchTab('test');}},'Проверка стабильности')
+            ]);
             this.refresh(); poll.add(L.bind(this.refresh, this), 3);
-            return root;
+            this.refreshTest(); poll.add(L.bind(this.refreshTest, this), 5);
+            return E('div',{},[tabs,root,tester]);
         }, this));
     }
 });

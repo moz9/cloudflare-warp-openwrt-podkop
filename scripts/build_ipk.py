@@ -7,11 +7,12 @@ import argparse
 import gzip
 import hashlib
 import io
+import json
 from pathlib import Path
 import tarfile
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = '0.1.1'
+VERSION = '0.1.2'
 BACKEND_VERSION = '0.1.0'
 
 def archive(entries):
@@ -77,9 +78,15 @@ def build(backend, out):
             name = path.relative_to(ROOT / 'root').as_posix()
             mode = 0o755 if name.startswith(('usr/libexec/', 'etc/init.d/')) else 0o644
             if name == 'etc/config/warp': mode = 0o600
-            entries.append((name, path.read_bytes().replace(b'\r\n', b'\n'), mode))
+            data = path.read_bytes().replace(b'\r\n', b'\n')
+            if name == 'usr/share/luci/menu.d/luci-app-warp.json':
+                menu = json.loads(data)
+                menu['admin/network/warp']['action']['path'] = 'warp/cfwarp_' + VERSION.replace('.', '_')
+                data = (json.dumps(menu, ensure_ascii=False, indent=2)+'\n').encode()
+            entries.append((name, data, mode))
     ui = ROOT / 'htdocs/luci-static/resources/view/warp/cfwarp.js'
-    entries.append(('www/luci-static/resources/view/warp/cfwarp.js', ui.read_bytes().replace(b'\r\n', b'\n'), 0o644))
+    # Themes may pin resource_version. A versioned filename prevents a stale UI.
+    entries.append(('www/luci-static/resources/view/warp/cfwarp_' + VERSION.replace('.', '_') + '.js', ui.read_bytes().replace(b'\r\n', b'\n'), 0o644))
     installed.extend(('/'+name, data) for name, data, _ in entries if not name.startswith('etc/config/'))
     files.append(package(out, 'luci-app-warp', 'all', entries,
                          'luci-base, rpcd-mod-ucode, curl, jsonfilter, warp-awg, warp-warpscout', ['/etc/config/warp']))

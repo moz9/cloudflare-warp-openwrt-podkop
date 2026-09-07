@@ -26,6 +26,8 @@ jobs:
         run: python tests/test_ipk.py
       - name: Check operation ownership
         run: sh tests/test_concurrency.sh "$PWD/root/usr/libexec/warp-common"
+      - name: Check stability result classification
+        run: python tests/test_stability.py
       - uses: actions/upload-artifact@v4
         with:
           name: opkg-aarch64-cortex-a53

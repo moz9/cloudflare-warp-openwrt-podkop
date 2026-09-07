@@ -1,0 +1,206 @@
+#!/bin/sh
+# Fixed HTTPS probes through the current WARP. No UCI writes/service restarts.
+set -u
+umask 077
+. "${WARP_COMMON_LIB:-/usr/libexec/warp-common}"
+WORK=${WARP_TEST_WORK:-/tmp/warp-test}
+DATA=${WARP_TEST_DATA:-/usr/share/warp-test}
+SELF=${WARP_TEST_SELF:-/usr/libexec/warp-test}
+LOCK=${WARP_TEST_LOCK:-/var/lock/warp-test.lock}
+LOCK=$(readlink -f "$LOCK")
+mkdir -p "$WORK"
+chmod 700 "$WORK"
+get() { cat "$WORK/$1" 2>/dev/null || true; }
+put() { printf '%s\n' "$2" > "$WORK/$1.tmp"; mv "$WORK/$1.tmp" "$WORK/$1"; }
+stamp() { awk '{print $22}' "/proc/$1/stat" 2>/dev/null; }
+alive() {
+    p=$(get pid); s=$(get stamp)
+    case "$p" in ''|*[!0-9]*) return 1 ;; esac
+    [ -n "$s" ] && [ "$(stamp "$p")" = "$s" ] && kill -0 "$p" 2>/dev/null
+}
+answer() { printf '{"ok":%s,"code":"%s"}\n' "$1" "$2"; }
+valid_selection() {
+    case "$1" in ''|,*|*,|*,,*|*[!a-z_,]*) return 1 ;; esac
+    oldifs=$IFS; IFS=,; set -- $1; IFS=$oldifs
+    [ "$#" -ge 1 ] && [ "$#" -le 8 ] || return 1
+    seen=,
+    for id in "$@"; do
+        case "$id" in google|google_ai|chatgpt|youtube|google_play|discord|telegram|cloudflare) ;; *) return 1 ;; esac
+        case "$seen" in *",$id,"*) return 1 ;; esac
+        seen="$seen$id,"
+    done
+}
+real_ipv4() {
+    printf '%s\n' "$1" | awk -F. '
+    NF!=4 {exit 1}
+    {for(i=1;i<=4;i++) if($i!~/^[0-9]+$/ || length($i)>3 || $i+0>255 || (length($i)>1 && substr($i,1,1)=="0"))exit 1}
+    $1==0 || $1==10 || $1==127 || $1>=224 {exit 1}
+    $1==100 && $2>=64 && $2<=127 {exit 1}
+    $1==169 && $2==254 {exit 1}
+    $1==172 && $2>=16 && $2<=31 {exit 1}
+    $1==192 && ($2==168 || $2==0) {exit 1}
+    $1==198 && ($2==18 || $2==19 || ($2==51 && $3==100)) {exit 1}
+    $1==203 && $2==0 && $3==113 {exit 1}'
+}
+monotime() { cut -d. -f1 /proc/uptime; }
+snapshot() {
+    # jshn uses optional globals; nounset must be disabled.
+    set +u
+    . /usr/share/libubox/jshn.sh
+    json_init
+    json_add_boolean ok 1
+    json_add_string state "$(get state)"
+    json_add_string reason "$(get reason)"
+    json_add_int minutes "$(get minutes)"
+    json_add_int started_at "$(get started_at)"
+    json_add_int elapsed "$(get elapsed)"
+    json_add_int round "$(get round)"
+    json_add_string selection "$(get selection)"
+    json_add_string interface "$(get interface)"
+    json_add_string endpoint "$(get endpoint)"
+    json_add_int warp_checks "$(get warp_checks)"
+    json_add_int warp_failures "$(get warp_failures)"
+    json_add_array services
+    awk -F'|' -f "$DATA/score.awk" "$WORK/samples" > "$WORK/score"
+    while IFS='|' read -r id total good restricted dns network http median p95 last code; do
+        [ -n "$id" ] || continue
+        json_add_object
+        json_add_string id "$id"
+        json_add_int total "$total"
+        json_add_int good "$good"
+        json_add_int restricted "$restricted"
+        json_add_int dns "$dns"
+        json_add_int network "$network"
+        json_add_int http "$http"
+        json_add_int median_ms "$median"
+        json_add_int p95_ms "$p95"
+        json_add_string last "$last"
+        json_add_string http_code "$code"
+        json_close_object
+    done < "$WORK/score"
+    json_close_array
+    json_dump > "$WORK/status.tmp"
+    mv "$WORK/status.tmp" "$WORK/status.json"
+    set -u
+}
+remaining() {
+    left=$((deadline-$(monotime)))
+    [ "$left" -gt 0 ] || return 1
+    [ "$left" -le 8 ] || left=8
+}
+stopping() { [ -e "$WORK/stop" ] || [ "$(monotime)" -ge "$deadline" ]; }
+same_tunnel() {
+    [ ! -e /etc/warp/disabled ] &&
+    [ "$(cat "/sys/class/net/$iface/ifindex" 2>/dev/null)" = "$ifindex" ] &&
+    [ "$(uci -q get warp.main.actual_interface)" = "$iface" ] &&
+    [ "$(/usr/libexec/warp-awgctl get "$iface" endpoint 2>/dev/null)" = "$endpoint" ]
+}
+resolve_host() {
+    remaining || return 1
+    # DNS is also sent over WARP; never feed Podkop FakeIP back into the test.
+    response=$(curl -4sS --noproxy '*' --interface "$iface" --resolve cloudflare-dns.com:443:1.1.1.1 \
+        --connect-timeout 4 --max-time "$left" --max-filesize 16384 -H 'accept: application/dns-json' \
+        "https://cloudflare-dns.com/dns-query?name=$1&type=A" 2>/dev/null) || return 1
+    for ip in $(printf '%s' "$response" | jsonfilter -e '@.Answer[*].data' 2>/dev/null); do
+        if real_ipv4 "$ip"; then printf '%s\n' "$ip"; return 0; fi
+    done
+    return 1
+}
+probe() {
+    id=$1; host=$2; url=$3
+    stopping && return 0
+    ip=$(resolve_host "$host") || { printf '%s|dns|0|6|000|0\n' "$id" >> "$WORK/samples"; return 0; }
+    stopping && return 0
+    remaining || return 0
+    rc=0
+    result=$(curl -4sS --head --noproxy '*' --interface "$iface" --resolve "$host:443:$ip" \
+        --connect-timeout 4 --max-time "$left" --output /dev/null \
+        --write-out '%{http_code}|%{time_total}' "$url" 2>/dev/null) || rc=$?
+    code=${result%%|*}; seconds=${result#*|}
+    ms=$(awk -v s="$seconds" 'BEGIN{printf "%.0f",s*1000}')
+    kind=network
+    if [ "$rc" = 0 ]; then
+        case "$code" in 2??|3??) kind=ok ;; 401|403|429) kind=restricted ;; *) kind=http ;; esac
+    fi
+    printf '%s|%s|%s|%s|%s|0\n' "$id" "$kind" "$ms" "$rc" "$code" >> "$WORK/samples"
+}
+worker() {
+    [ "$(readlink /proc/self/fd/7 2>/dev/null)" = "$LOCK" ] || exit 1
+    flock -n 7 || exit 1
+    put pid $$; put stamp "$(stamp $$)"
+    iface=$(get interface); endpoint=$(get endpoint); ifindex=$(get ifindex)
+    started=$(monotime); deadline=$((started+$(get minutes)*60))
+    finish() {
+        trap - EXIT
+        if [ "$(get state)" = running ]; then put state interrupted; put reason worker_interrupted; fi
+        put elapsed "$(($(monotime)-started))"
+        snapshot
+    }
+    trap finish EXIT
+    trap 'exit 1' HUP INT TERM
+    while ! stopping; do
+        same_tunnel || { put state changed; put reason tunnel_changed; exit 0; }
+        cycle=$(monotime)
+        put round "$(($(get round)+1))"
+        remaining || break
+        put warp_checks "$(($(get warp_checks)+1))"
+        if ! curl -4fsS --interface "$iface" --noproxy '*' --connect-timeout 4 --max-time "$left" \
+            --max-filesize 16384 https://1.1.1.1/cdn-cgi/trace 2>/dev/null | grep -Eq '^warp=(on|plus)$'; then
+            put warp_failures "$(($(get warp_failures)+1))"
+        fi
+        while IFS='|' read -r id label host url; do
+            stopping && break
+            same_tunnel || { put state changed; put reason tunnel_changed; exit 0; }
+            case ",$(get selection)," in *",$id,"*) probe "$id" "$host" "$url" ;; esac
+            put elapsed "$(($(monotime)-started))"
+            snapshot
+        done < "$DATA/services.tsv"
+        while [ "$(monotime)" -lt "$((cycle+60))" ] && ! stopping; do sleep 1; done
+    done
+    if [ -e "$WORK/stop" ]; then put state stopped; else put state complete; fi
+}
+case "${1:-}" in
+start)
+    minutes=${2:-}; selection=${3:-}
+    case "$minutes" in 15|30|45|60) ;; *) answer false invalid_duration; exit 1 ;; esac
+    valid_selection "$selection" || { answer false invalid_selection; exit 1; }
+    exec 6>>"$LOCK.control"
+    flock -n 6 || { answer false test_busy; exit 0; }
+    exec 7>>"$LOCK"
+    flock -n 7 || { answer false test_busy; exit 0; }
+    warp_operation_acquire || { answer false operation_in_progress; exit 0; }
+    iface=$(uci -q get warp.main.actual_interface)
+    printf '%s' "$iface" | grep -Eq '^[A-Za-z_][A-Za-z0-9_]{0,14}$' || { answer false managed_interface_missing; exit 0; }
+    [ -e "/sys/class/net/$iface/tun_flags" ] && [ "$(uci -q get "network.$iface.warp_managed")" = luci-app-warp ] || { answer false managed_interface_missing; exit 0; }
+    endpoint=$(/usr/libexec/warp-awgctl get "$iface" endpoint)
+    [ -n "$endpoint" ] || { answer false managed_interface_missing; exit 0; }
+    rm -f "$WORK/stop"
+    put state running; put reason ''; put minutes "$minutes"; put selection "$selection"
+    put interface "$iface"; put endpoint "$endpoint"; put ifindex "$(cat "/sys/class/net/$iface/ifindex")"
+    put started_at "$(date +%s)"; put elapsed 0; put round 0; put warp_checks 0; put warp_failures 0
+    put pid $$; put stamp "$(stamp $$)"
+    : > "$WORK/samples"
+    snapshot
+    setsid "$SELF" worker 9>&- 6>&- </dev/null >"$WORK/worker.log" 2>&1 &
+    n=0
+    while [ "$(get pid)" = "$$" ] && [ "$n" -lt 3 ]; do sleep 1; n=$((n+1)); done
+    answer true started
+    ;;
+worker) worker ;;
+status)
+    if [ ! -s "$WORK/status.json" ]; then echo '{"ok":true,"state":"idle","services":[]}'
+    elif [ "$(get state)" = running ] && ! alive; then
+        # Do not write from readers: a new worker could be starting concurrently.
+        sed 's/"state": "running"/"state": "interrupted"/' "$WORK/status.json"
+    elif [ "$(get state)" = running ] && [ -e "$WORK/stop" ]; then
+        sed 's/"state": "running"/"state": "stopping"/' "$WORK/status.json"
+    else cat "$WORK/status.json"; fi
+    ;;
+stop)
+    exec 6>>"$LOCK.control"
+    flock -n 6 || { answer false test_busy; exit 0; }
+    if alive && [ "$(get state)" = running ]; then touch "$WORK/stop"; answer true stopping
+    else answer true already_stopped; fi
+    ;;
+*) answer false invalid_action; exit 1 ;;
+esac

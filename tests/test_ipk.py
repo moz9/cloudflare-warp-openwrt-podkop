@@ -4,6 +4,7 @@ from pathlib import Path
 import tempfile
 import tarfile
 import unittest
+import json
 
 ROOT=Path(__file__).resolve().parents[1]
 spec=importlib.util.spec_from_file_location('build_ipk',ROOT/'scripts/build_ipk.py')
@@ -24,6 +25,15 @@ class PackagingTests(unittest.TestCase):
     def test_deterministic_archives(self):
         entries=[('a/b',b'data',0o755)]
         self.assertEqual(build.archive(entries),build.archive(entries))
+    def test_menu_points_to_packaged_versioned_asset(self):
+        p=ROOT/'dist-podkop'/f'luci-app-warp_{build.VERSION}_all.ipk'
+        with tarfile.open(p) as outer:
+            data=outer.extractfile('./data.tar.gz').read()
+        with tarfile.open(fileobj=io.BytesIO(data)) as inner:
+            menu=json.load(inner.extractfile('./usr/share/luci/menu.d/luci-app-warp.json'))
+            view=menu['admin/network/warp']['action']['path']
+            self.assertIn(build.VERSION.replace('.','_'),view)
+            self.assertTrue(inner.getmember('./www/luci-static/resources/view/'+view+'.js').isfile())
     def test_release_manifest_and_files(self):
         dist=ROOT/'dist-podkop'
         self.assertNotIn(b'\r',(dist/'SHA256SUMS').read_bytes())
@@ -42,7 +52,7 @@ class PackagingTests(unittest.TestCase):
         import shutil,subprocess
         sh=shutil.which('sh') or r'C:\Program Files\Git\bin\bash.exe'
         paths=list((ROOT/'root/usr/libexec').glob('warp-*'))+list((ROOT/'root/etc/init.d').glob('warp*'))+[ROOT/'install-podkop.sh']
-        paths += [ROOT/'tests/test_concurrency.sh', ROOT/'tests/router-coexistence.sh']
+        paths += [ROOT/'tests/test_concurrency.sh', ROOT/'tests/router-coexistence.sh', ROOT/'tests/test_stability.sh']
         for p in paths:
             subprocess.run([sh,'-n',str(p)],check=True,capture_output=True)
         subprocess.run(['node','--check',str(ROOT/'htdocs/luci-static/resources/view/warp/cfwarp.js')],check=True,capture_output=True)

@@ -54,3 +54,27 @@ of scope.
 The original SDK recipes/tests remain as upstream reference. The maintained
 opkg path is `scripts/prepare_backend.py`, `scripts/build_ipk.py`,
 `tests/test_ipk.py` and `tests/router-safety.sh`.
+
+## Stability tester (0.1.2)
+
+`warp-test` samples fixed service URLs on the current interface. Both DoH and
+HTTPS bind to WARP. Answers are pinned only after rejecting private/reserved
+IPv4 addresses including Podkop FakeIP. HEAD requests do not follow redirects,
+download media or carry credentials. 2xx/3xx, 401/403/429, other HTTP errors,
+DNS failures and transport failures are counted separately. Latency statistics
+include received HTTP responses, not failed DNS/connection attempts.
+
+A monotonic uptime clock bounds all four durations; each curl is limited by
+the remaining time and eight seconds. A cycle normally starts once per minute;
+slow rounds extend the cycle, not the total deadline. Interface index and
+endpoint changes end the run. No route, UCI, firewall or service is modified.
+
+FD 7 serializes the worker and installer; FD 6 serializes start/stop admission.
+The global WARP FD 9 is used only during test admission and is closed in the
+worker, so watchdog recovery remains available. A stop flag is observed between
+bounded requests. Results are atomically replaced under a private RAM directory.
+PID plus process-start stamp distinguishes an interrupted worker from PID reuse.
+
+IPK generation versions the view's filename and menu path because some LuCI
+themes override `resource_version` with a constant, retaining stale JavaScript
+across upgrades. The public page URL remains unchanged.

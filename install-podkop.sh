@@ -2,7 +2,7 @@
 # Pinned release; update unchanged backends only when their file hashes differ.
 set -eu
 umask 077
-VERSION=0.1.1
+VERSION=0.1.2
 BACKEND_VERSION=0.1.0
 BASE=https://github.com/moz9/cloudflare-warp-openwrt-podkop/releases/download/v$VERSION
 fail() { echo "CF WARP: $*" >&2; exit 1; }
@@ -10,6 +10,8 @@ fail() { echo "CF WARP: $*" >&2; exit 1; }
 for cmd in opkg curl uci flock jsonfilter; do command -v "$cmd" >/dev/null || fail "Missing prerequisite: $cmd"; done
 exec 9>>/var/lock/warp-operation.lock
 flock -n 9 || fail 'A WARP operation is active.'
+exec 7>>/var/lock/warp-test.lock
+flock -n 7 || fail 'A WARP stability test is active. Stop it before updating.'
 [ -z "$(uci changes)" ] || fail 'Save or discard pending LuCI changes first.'
 # Old-generation workers do not use flock yet.
 for f in /var/lock/warp-job.lock/pid /var/lock/warp-manager.lock/pid; do
@@ -90,7 +92,7 @@ rollback_packages() {
     awk -v names="$packages" 'BEGIN {RS="";ORS="\n\n";split(names,n," ");for(i in n) own[n[i]]=1} {split($0,a,"\n");sub(/^Package: /,"",a[1]);if(a[1] in own) print}' "$backup/opkg-status" >> "$work/status" || return 1
     cat "$work/status" > /usr/lib/opkg/status || return 1
     awk '{print $2}' "$work/FILES.sha256" | while IFS= read -r f; do
-        case "$f" in /usr/libexec/warp-*|/usr/share/rpcd/acl.d/luci-app-warp.json|/usr/share/rpcd/ucode/warp.uc|/usr/share/luci/menu.d/luci-app-warp.json|/www/luci-static/resources/view/warp/cfwarp.js|/etc/init.d/warp|/etc/init.d/warp-watchdog|/lib/upgrade/keep.d/cfwarp) ;;
+        case "$f" in /usr/libexec/warp-*|/usr/share/warp-test/*|/usr/share/rpcd/acl.d/luci-app-warp.json|/usr/share/rpcd/ucode/warp.uc|/usr/share/luci/menu.d/luci-app-warp.json|/www/luci-static/resources/view/warp/cfwarp*.js|/etc/init.d/warp|/etc/init.d/warp-watchdog|/lib/upgrade/keep.d/cfwarp) ;;
         *) continue ;; esac
         grep -Fxq "$f" "$backup/previous-files" || {
             case "$f" in /usr/libexec/warp-amneziawg-go|/usr/libexec/warp-awgctl|/usr/libexec/warp-warpscout) [ "$backend_changed" = 0 ] || rm -f "$f" || exit 1 ;; *) rm -f "$f" || exit 1 ;; esac
