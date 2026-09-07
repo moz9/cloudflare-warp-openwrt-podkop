@@ -31,7 +31,7 @@ class PackagingTests(unittest.TestCase):
             data=outer.extractfile('./data.tar.gz').read()
         with tarfile.open(fileobj=io.BytesIO(data)) as inner:
             menu=json.load(inner.extractfile('./usr/share/luci/menu.d/luci-app-warp.json'))
-            view=menu['admin/network/warp']['action']['path']
+            view=menu['admin/services/warp']['action']['path']
             self.assertIn(build.VERSION.replace('.','_'),view)
             self.assertTrue(inner.getmember('./www/luci-static/resources/view/'+view+'.js').isfile())
     def test_release_manifest_and_files(self):

@@ -84,7 +84,7 @@ def build(backend, out):
             data = path.read_bytes().replace(b'\r\n', b'\n')
             if name == 'usr/share/luci/menu.d/luci-app-warp.json':
                 menu = json.loads(data)
-                menu['admin/network/warp']['action']['path'] = view_name
+                menu['admin/services/warp']['action']['path'] = view_name
                 data = (json.dumps(menu, ensure_ascii=False, indent=2)+'\n').encode()
             entries.append((name, data, mode))
     # Themes may pin resource_version. A versioned filename prevents a stale UI.
