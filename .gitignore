@@ -11,6 +11,7 @@ tmp/
 *.swp
 *~
 dist-podkop/
+dist-apk/
 __pycache__/
 *.pyc
 .build/

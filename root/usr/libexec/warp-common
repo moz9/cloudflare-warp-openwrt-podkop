@@ -16,6 +16,28 @@ warp_operation_busy() (
     exit 0
 )
 
+# WarpScout does not set SO_MARK. Its outer UDP packets must not be measured
+# through an existing Podkop proxy. Only unmarked router-originated packets to
+# the pinned WarpScout 0.16 WARP pools are affected, for this operation's lifetime.
+WARP_NFT_BIN=${WARP_NFT_BIN:-/usr/sbin/nft}
+WARP_SCOUT_TABLE=
+warp_scout_route_acquire() {
+    [ -z "$WARP_SCOUT_TABLE" ] || return 0
+    scout_table="warp_scout_$$"
+    "$WARP_NFT_BIN" list table inet "$scout_table" >/dev/null 2>&1 && return 1
+    "$WARP_NFT_BIN" -f - <<EOF || return 1
+add table inet $scout_table
+add chain inet $scout_table output { type route hook output priority -151; policy accept; }
+add rule inet $scout_table output meta mark 0 ip daddr { 8.6.112.0/24, 8.34.70.0/24, 8.34.146.0/24, 8.35.211.0/24, 8.39.125.0/24, 8.39.204.0/24, 8.39.214.0/24, 8.47.69.0/24, 162.159.192.0/24, 162.159.195.0/24, 188.114.96.0/22 } meta l4proto udp meta mark set 0x200000 counter comment "CF WARP direct scan"
+EOF
+    WARP_SCOUT_TABLE=$scout_table
+}
+warp_scout_route_release() {
+    [ -n "$WARP_SCOUT_TABLE" ] || return 0
+    "$WARP_NFT_BIN" delete table inet "$WARP_SCOUT_TABLE" || return 1
+    WARP_SCOUT_TABLE=
+}
+
 # Compatible with the subscription/DNS mutation protocol. Do not steal stale
 # or incomplete ownership: Podkop itself handles its legacy stale-lock recovery.
 WARP_PODKOP_LOCK=${WARP_PODKOP_LOCK:-/tmp/podkop-subscription-action.lock.d}

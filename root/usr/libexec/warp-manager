@@ -49,6 +49,7 @@ previous_disabled=0
 network_reload_needed=1
 
 cleanup() {
+	warp_scout_route_release || true
 	if [ "$transaction_active" = 1 ]; then
 		transaction_active=0
 		rollback_configuration || printf '%s\n' 'rollback_failed' > "$LAST_ERROR"
@@ -712,11 +713,13 @@ connect_tunnel() {
 	: >"$BACKEND_LOG" || emit_error 'state_write_failed'
 	chmod 600 "$BACKEND_LOG" || emit_error 'state_write_failed'
 	check_system_time
+	warp_scout_route_acquire || emit_error 'scan_route_failed'
 	if ! account_valid || ! awg_config_valid; then
 		rescan=1
 	fi
 	ensure_account
 	prepare_tunnel_config "$rescan"
+	warp_scout_route_release || emit_error 'scan_route_cleanup_failed'
 	"$SERVICE_INIT" status >/dev/null 2>&1 && previous_running=1 || true
 	[ ! -e "$DISABLED_FILE" ] || previous_disabled=1
 	runtime_stop

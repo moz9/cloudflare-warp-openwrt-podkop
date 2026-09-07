@@ -6,6 +6,7 @@
 python tests/test_ipk.py
 python tests/test_stability.py
 sh tests/test_concurrency.sh "$PWD/root/usr/libexec/warp-common"
+sh tests/test_scout_route.sh "$PWD/root/usr/libexec/warp-common"
 ```
 
 На OpenWrt, после установки, без сетевых запросов или изменений конфигурации:

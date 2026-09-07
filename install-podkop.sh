@@ -2,12 +2,12 @@
 # Pinned release; update unchanged backends only when their file hashes differ.
 set -eu
 umask 077
-VERSION=0.1.3
+VERSION=0.1.4
 BACKEND_VERSION=0.1.0
 BASE=https://github.com/moz9/cloudflare-warp-openwrt-podkop/releases/download/v$VERSION
 fail() { echo "CF WARP: $*" >&2; exit 1; }
 [ "$(id -u)" = 0 ] || fail 'root required'
-for cmd in opkg curl uci flock jsonfilter; do command -v "$cmd" >/dev/null || fail "Missing prerequisite: $cmd"; done
+for cmd in opkg curl uci flock jsonfilter nft; do command -v "$cmd" >/dev/null || fail "Missing prerequisite: $cmd"; done
 exec 9>>/var/lock/warp-operation.lock
 flock -n 9 || fail 'A WARP operation is active.'
 exec 7>>/var/lock/warp-test.lock

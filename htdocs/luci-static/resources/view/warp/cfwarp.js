@@ -48,6 +48,8 @@ const errors = {
     invalid_duration: 'Выберите 15, 30, 45 или 60 минут.',
     invalid_selection: 'Выберите хотя бы один сервис.',
     data_plane_unavailable: 'Проверка HTTPS через WARP не прошла.',
+    scan_route_failed: 'Не удалось подготовить прямую проверку узлов WARP.',
+    scan_route_cleanup_failed: 'Не удалось удалить временное правило проверки WARP.',
     endpoint_scan_failed: 'Рабочий узел не найден. Попробуйте другое маскирующее имя.',
     awg_registration_failed: 'Не удалось зарегистрировать WARP.',
     podkop_section_conflict: 'Секция cfwarp уже существует с другими настройками. Она сохранена.',

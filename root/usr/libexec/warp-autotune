@@ -88,10 +88,12 @@ auto_worker() {
     finish_auto() {
         trap - EXIT
         proxy_stop
+        warp_scout_route_release || { put state error; put reason scan_route_cleanup_failed; }
         [ "$(get state)" != running ] || { put state interrupted; put reason worker_interrupted; }
         put elapsed "$(($(monotime)-started))"; snapshot_auto
     }
     trap finish_auto EXIT; trap 'exit 1' HUP INT TERM
+    warp_scout_route_acquire || { put state error; put reason scan_route_failed; exit 1; }
     if [ ! -s "$ACCOUNT" ]; then
         put reason registering_test_account; snapshot_auto
         GOMAXPROCS=1 GOMEMLIMIT=24MiB /usr/libexec/warp-limit 60 /usr/libexec/warp-warpscout register --plain --relay none --interface "$(get wan)" --account "$ACCOUNT" > "$WORK/register.log" 2>&1 || {

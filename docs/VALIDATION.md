@@ -152,3 +152,29 @@ ARM64 cortex-a53, Podkop 0.7.22, действующие ByeDPI и ZeroTier.
 Существующие firewall, DHCP и ByeDPI конфигурации оставлены без изменений.
 MAIN и BYEDPI не переназначались. Временный проверочный домен удаляется из
 новой секции после завершения проверки; выбор рабочих списков остаётся пользователю.
+# OpenWrt 25.12 / APK and direct scan correction (0.1.4)
+
+On Cudy WBR3000UAX, OpenWrt 25.12.4, Podkop 0.7.22, the initial three native
+connection attempts failed the stock HTTPS readiness check and rolled back.
+Native handshake/rx remained zero despite successful WarpScout endpoint results.
+An isolated repeat of the scan increased Podkop's intercepted UDP counter by
+26 packets. Directly marking the scan's outer packets changed the result:
+the previously selected 188.114 pool did not answer; a 162.159.192 endpoint did.
+
+With the correction installed, native WARP connected successfully. The manager
+removed its temporary nft table before its stock HTTPS probe returned warp=on.
+An independently resolved www.cloudflare.com trace also returned warp=on over
+the native interface. The selected node was HEL, with loc=RU; this is not a
+guarantee of access to geographically restricted AI services.
+
+The empty cfwarp Podkop section generated a direct outbound bound to warp.
+All previous Podkop sections were byte-identical after removing the new section
+from the comparison. Existing firewall, DHCP, ByeDPI and ZeroTier UCI file hashes
+matched the baseline. ByeDPI's YouTube HTTPS probe returned 204; ZeroTier was
+ONLINE. ZeroTier's separate local configuration and its installed template were
+backed up and updated to exclude the warp interface, with one deliberate restart.
+
+Mock regression tests passed for scan-table ownership, creation failure,
+cleanup failure/retry and idempotence; existing operation-lock tests passed.
+IPK packaging tests and APK payload/metadata checksum equivalence tests passed.
+The APK upgrade preflight selected only luci-app-warp, with no dependency changes.
