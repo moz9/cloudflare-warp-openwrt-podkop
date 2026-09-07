@@ -26,7 +26,7 @@ installed() {
     else opkg status "$1" 2>/dev/null | grep -q 'Status: .* installed'; fi
 }
 download() {
-    if command -v curl >/dev/null; then curl -fL --connect-timeout 10 --max-time 120 "$1" -o "$2"
+    if command -v curl >/dev/null; then curl -fsSL --retry 2 --retry-all-errors --retry-delay 1 --connect-timeout 10 --max-time 120 "$1" -o "$2"
     else wget -T 120 -qO "$2" "$1"; fi
 }
 # Bootstrap only missing prerequisites. Package-manager dependency changes are
