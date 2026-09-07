@@ -108,7 +108,8 @@ return view.extend({
             const cols=['Вариант','Доступность','Обрывы WARP','Скорость','Задержка 95%','Действие'];
             this.autoRows.replaceChildren(...(s.candidates||[]).map((c,index)=>{
                 const eligible=s.state==='complete'&&c.checks>=3&&c.failures===0&&c.rounds>=3&&c.good>0;
-                const apply=E('button',{class:'btn',disabled:!eligible||!!this.autoPending,click:()=>this.autoAction(()=>autoApplyRPC(c.id))},'Применить');
+                const apply=E('button',{class:'btn',click:()=>this.autoAction(()=>autoApplyRPC(c.id))},'Применить');
+                apply.disabled=!eligible||!!this.autoPending;
                 const details=E('details',{open:this.autoExpanded.has(c.id)||null},[
                     E('summary',{},'По сервисам'),...(c.services||[]).map(v=>{
                         const profile=testProfiles.find(p=>p[0]===v.id);

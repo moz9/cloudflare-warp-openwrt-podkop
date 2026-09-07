@@ -2,6 +2,7 @@ const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const fs=require('node:fs'), os=require('node:os'), path=require('node:path'), crypto=require('node:crypto');
 const {spawnSync}=require('node:child_process');
+const version=fs.readFileSync(path.join(__dirname,'../install-podkop.sh'),'utf8').match(/^VERSION=(.+)$/m)[1].trim();
 const shell=process.platform==='win32'?'C:/Program Files/Git/bin/bash.exe':'sh';
 function scenario({pm='opkg',badHash=false,failInstall=false,failSetup=false,pending=false,arch='aarch64_cortex-a53'}={}) {
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'warp-install-'));
@@ -20,7 +21,7 @@ function scenario({pm='opkg',badHash=false,failInstall=false,failSetup=false,pen
   }
   fs.writeFileSync(path.join(dir,'bundle/FILES.sha256'),files);
   fs.writeFileSync(path.join(dir,'bundle/INSTALL-SIZES'),'luci-app-warp 1\nwarp-awg 1\nwarp-warpscout 1\n');
-  const packages=pm==='apk'?['luci-app-warp-0.1.5-r1.apk','warp-awg-0.1.0-r1.apk','warp-warpscout-0.1.0-r1.apk']:['luci-app-warp_0.1.5_all.ipk','warp-awg_0.1.0_aarch64_cortex-a53.ipk','warp-warpscout_0.1.0_aarch64_cortex-a53.ipk'];
+  const packages=pm==='apk'?[`luci-app-warp-${version}-r1.apk`,'warp-awg-0.1.0-r1.apk','warp-warpscout-0.1.0-r1.apk']:[`luci-app-warp_${version}_all.ipk`,'warp-awg_0.1.0_aarch64_cortex-a53.ipk','warp-warpscout_0.1.0_aarch64_cortex-a53.ipk'];
   for(const p of packages)fs.writeFileSync(path.join(dir,'bundle',p),'package');
   const sums=[...packages,'FILES.sha256','INSTALL-SIZES'].map(p=>`${crypto.createHash('sha256').update(fs.readFileSync(path.join(dir,'bundle',p))).digest('hex')}  ${p}\n`).join('');
   fs.writeFileSync(path.join(dir,'bundle',pm==='apk'?'SHA256SUMS-APK':'SHA256SUMS'),badHash?sums.replace(/^[0-9a-f]/,'z'):sums);
