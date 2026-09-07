@@ -102,6 +102,8 @@ Discord, Telegram и Cloudflare. Это небольшие фиксирован�
 
 ```sh
 python tests/test_ipk.py
+python scripts/build_apk.py
+python tests/test_apk.py
 python tests/test_stability.py
 sh tests/router-safety.sh
 ```

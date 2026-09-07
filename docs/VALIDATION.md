@@ -178,3 +178,18 @@ Mock regression tests passed for scan-table ownership, creation failure,
 cleanup failure/retry and idempotence; existing operation-lock tests passed.
 IPK packaging tests and APK payload/metadata checksum equivalence tests passed.
 The APK upgrade preflight selected only luci-app-warp, with no dependency changes.
+
+The live 15-minute stability test completed all 900 seconds: 180 requests,
+150 successful HTTP responses and 30 ChatGPT/OpenAI 403 responses; zero DNS,
+network or other HTTP errors. All 15 WARP trace checks passed. Package 0.1.4
+was then installed and every payload hash verified. WARP, sing-box, ByeDPI and
+ZeroTier process IDs and all seven checked UCI file hashes remained unchanged
+during that package upgrade. Client video playback and authenticated AI chat
+were not part of this test; a 403 or login redirect is not proof of usability.
+
+After the APK update, an autotune start/stop smoke test ran 95 seconds using
+the separate account and SOCKS worker: three complete rounds, 36 requests,
+three successful WARP checks, zero network errors and six OpenAI 403 responses.
+Stopping via LuCI RPC removed the temporary nft table. The live tunnel endpoint
+and all four service PIDs were unchanged. This was a single-candidate smoke
+test, not a completed ranking of all six candidates on this router.
