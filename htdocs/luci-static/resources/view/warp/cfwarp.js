@@ -10,6 +10,10 @@ const statusRPC = rpc.declare({ object: 'luci.warp', method: 'status' });
 const testStatusRPC = rpc.declare({ object: 'luci.warp', method: 'test_status' });
 const testStartRPC = rpc.declare({ object: 'luci.warp', method: 'test_start', params: ['minutes', 'services'] });
 const testStopRPC = rpc.declare({ object: 'luci.warp', method: 'test_stop' });
+const autoStatusRPC = rpc.declare({object:'luci.warp',method:'autotune_status'});
+const autoStartRPC = rpc.declare({object:'luci.warp',method:'autotune_start',params:['minutes','services']});
+const autoStopRPC = rpc.declare({object:'luci.warp',method:'autotune_stop'});
+const autoApplyRPC = rpc.declare({object:'luci.warp',method:'autotune_apply',params:['candidate']});
 const testProfiles = [
     ['google', 'Google', true], ['google_ai', 'Google AI / Gemini', true],
     ['chatgpt', 'ChatGPT / OpenAI', true], ['youtube', 'YouTube', true],
@@ -27,6 +31,16 @@ const states = {
     disabled: 'Отключён', error: 'Требуется внимание'
 };
 const errors = {
+    precheck_failed:'Узел не прошёл предварительную проверку или фильтры.',
+    proxy_start_failed:'Тестовый туннель не запустился.',
+    low_memory:'Недостаточно свободной памяти для отдельного тестового туннеля.',
+    test_port_busy:'Тестовый порт занят. Другой процесс сохранён.',
+    registering_test_account:'Подготовка отдельной тестовой регистрации',
+    registration_failed:'Не удалось подготовить тестовую регистрацию WARP.',
+    configuration_changed:'Настройки WARP изменились. Запустите подбор заново.',
+    incomplete_test:'Сначала завершите полный подбор.',
+    unqualified_candidate:'Недостаточно успешных проверок этого варианта.',
+    candidate_failed_rolled_back:'Выбранный вариант не прошёл проверку. Прежний восстановлен.',
     pending_uci_changes: 'Сначала сохраните или отмените несохранённые изменения LuCI.',
     operation_in_progress: 'Операция уже выполняется.',
     podkop_busy: 'Podkop обновляет подписки или DNS. Повторите после завершения операции.',
@@ -54,6 +68,58 @@ const done = {
 function message(code) { return errors[code] || done[code] || code || '—'; }
 
 return view.extend({
+    renderAutotune: function() {
+        this.autoExpanded=new Set();
+        this.autoChoices=testProfiles.map(p=>E('input',{type:'checkbox',value:p[0],checked:p[2]||null}));
+        this.autoDuration=E('select',{'aria-label':'Время всего подбора'},[15,30,45,60].map(m=>E('option',{value:m},m+' минут')));
+        this.autoProgress=E('p',{'aria-live':'polite'},'Подбор ещё не запускался.');
+        this.autoRows=E('tbody');
+        this.autoStart=E('button',{class:'btn cbi-button-action',click:()=>this.autoAction(()=>autoStartRPC(Number(this.autoDuration.value),this.autoChoices.filter(c=>c.checked).map(c=>c.value).join(',')))},'Начать автоподбор');
+        this.autoStop=E('button',{class:'btn',disabled:true,click:()=>this.autoAction(autoStopRPC)},'Остановить подбор');
+        return E('div',{},[
+            E('h2',{},'Автоподбор CF WARP'),
+            E('p',{},'Сравнивает шесть вариантов узла, порта и количества маскирующих пакетов через отдельный тестовый WARP. Рабочее подключение и списки Podkop сохраняются. Выбранное время относится ко всему подбору.'),
+            E('div',{style:'display:flex;flex-wrap:wrap;gap:16px;margin:16px 0'},testProfiles.map((p,i)=>E('label',{},[this.autoChoices[i],' '+p[1]]))),
+            E('div',{style:'display:flex;flex-wrap:wrap;gap:12px'},[this.autoDuration,this.autoStart,this.autoStop]),
+            this.autoProgress,
+            E('div',{style:'overflow-x:auto'},E('table',{class:'table warp-test-table'},[
+                E('thead',{},E('tr',{},['Вариант','Доступность','Обрывы WARP','Скорость','Задержка 95%','Действие'].map(t=>E('th',{},t)))),this.autoRows
+            ])),
+            E('p',{},'Рейтинг учитывает успешные ответы выбранных сервисов, ошибки, затем скорость и задержку. Для применения нужны минимум три круга и подтверждения WARP без обрывов. 403 не считается успехом. Скорость — ориентир по двум файлам по 1 МиБ на вариант (до 12 МиБ за подбор), не предел канала и не скорость YouTube.'),
+            E('p',{},'Исходный вариант отмечен в таблице; остальные сравниваются с ним. MTU и маскирующее имя в этом подборе не перебираются. Применение выбранного варианта может кратко прервать WARP; при неудачной проверке прежний вариант возвращается.')
+        ]);
+    },
+    autoAction: function(fn) {
+        this.autoPending=true; this.autoStart.disabled=true; this.autoStop.disabled=true;
+        return fn().then(r=>{if(!r||!r.ok) ui.addNotification(null,E('p',message(r&&r.code)),'error');
+            else if(['applied','already_applied'].includes(r.code)) ui.addNotification(null,E('p','Вариант применён и проверен.'),'info');
+        }).catch(e=>ui.addNotification(null,E('p',e.message),'error')).finally(()=>{this.autoPending=false;this.refreshAuto();});
+    },
+    refreshAuto: function() {
+        if(!this.autoProgress)return Promise.resolve();
+        return autoStatusRPC().then(s=>{
+            const running=['running','stopping'].includes(s.state);
+            const labels={idle:'Подбор ещё не запускался',running:'Подбор идёт',stopping:'Останавливается',complete:'Подбор завершён',stopped:'Подбор остановлен',interrupted:'Подбор прерван',changed:'Рабочая конфигурация изменилась',error:'Подбор завершился с ошибкой'};
+            this.autoProgress.textContent=(labels[s.state]||s.state)+(s.minutes?' · вариант '+(s.current||0)+' из 6 · '+Math.floor((s.elapsed||0)/60)+' из '+s.minutes+' мин':'')+(s.reason?' · '+message(s.reason):'');
+            this.autoStart.disabled=running||!!this.autoPending;this.autoStop.disabled=!running||!!this.autoPending;this.autoDuration.disabled=running;
+            this.autoChoices.forEach(c=>{c.disabled=running;if(running)c.checked=(','+s.selection+',').includes(','+c.value+',');});
+            const cols=['Вариант','Доступность','Обрывы WARP','Скорость','Задержка 95%','Действие'];
+            this.autoRows.replaceChildren(...(s.candidates||[]).map((c,index)=>{
+                const eligible=s.state==='complete'&&c.checks>=3&&c.failures===0&&c.rounds>=3&&c.good>0;
+                const apply=E('button',{class:'btn',disabled:!eligible||!!this.autoPending,click:()=>this.autoAction(()=>autoApplyRPC(c.id))},'Применить');
+                const details=E('details',{open:this.autoExpanded.has(c.id)||null},[
+                    E('summary',{},'По сервисам'),...(c.services||[]).map(v=>{
+                        const profile=testProfiles.find(p=>p[0]===v.id);
+                        return E('p',{},(profile?profile[1]:v.id)+': '+v.good+' / '+v.total+' · ограничений '+v.restricted+' · ошибок '+v.errors);
+                    })
+                ]);
+                details.addEventListener('toggle',()=>{if(details.open)this.autoExpanded.add(c.id);else this.autoExpanded.delete(c.id);});
+                const availability=E('div',{},[E('span',{},c.total?c.good+' / '+c.total+' · ограничений '+c.restricted+' · ошибок '+c.errors:message(c.note)),...(c.total?[details]:[])]);
+                const values=[(index+1)+'. '+c.endpoint+' · пакетов '+c.jc+(c.id===1?' (исходный)':''),availability,c.checks?c.failures+' / '+c.checks:'Нет проверок',(c.speed*8/1000000).toFixed(2)+' Мбит/с',c.p95+' мс',apply];
+                return E('tr',{},values.map((v,i)=>E('td',{'data-label':cols[i]},v)));
+            }));
+        }).catch(()=>{});
+    },
     renderTester: function() {
         this.testChoices = testProfiles.map(function(p) {
             return E('input', { type: 'checkbox', value: p[0], checked: p[2] || null });
@@ -208,9 +274,10 @@ return view.extend({
                 settings
             ]);
             const tester = this.renderTester();
+            const autotune = this.renderAutotune(); autotune.hidden=true;
             tester.hidden = true;
             const switchTab = function(which) {
-                root.hidden=which!=='main'; tester.hidden=which!=='test';
+                root.hidden=which!=='main'; tester.hidden=which!=='test'; autotune.hidden=which!=='auto';
                 const saveActions=document.querySelector('.cbi-page-actions');
                 if(saveActions) {
                     saveActions.hidden=which!=='main';
@@ -218,13 +285,15 @@ return view.extend({
                     else saveActions.style.setProperty('display','none','important');
                 }
             };
-            const tabs = E('div', {style:'display:flex;gap:8px;margin:12px 0'}, [
+            const tabs = E('div', {style:'display:flex;flex-wrap:wrap;gap:8px;margin:12px 0'}, [
                 E('button',{class:'btn',click:function(){switchTab('main');}},'Подключение'),
-                E('button',{class:'btn',click:function(){switchTab('test');}},'Проверка стабильности')
+                E('button',{class:'btn',click:function(){switchTab('test');}},'Проверка стабильности'),
+                E('button',{class:'btn',click:function(){switchTab('auto');}},'Автоподбор')
             ]);
             this.refresh(); poll.add(L.bind(this.refresh, this), 3);
             this.refreshTest(); poll.add(L.bind(this.refreshTest, this), 5);
-            return E('div',{},[tabs,root,tester]);
+            this.refreshAuto(); poll.add(L.bind(this.refreshAuto,this),5);
+            return E('div',{},[tabs,root,tester,autotune]);
         }, this));
     }
 });

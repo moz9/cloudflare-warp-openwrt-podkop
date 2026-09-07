@@ -1,0 +1,246 @@
+#!/bin/sh
+# Independent SOCKS candidates; never reuse the live account for concurrent peers.
+set -u
+umask 077
+WARP_TEST_WORK=/tmp/warp-autotune
+WARP_TEST_LIBRARY=1
+. "${WARP_AUTOTUNE_TEST_LIB:-/usr/libexec/warp-test}"
+SELF=${WARP_AUTOTUNE_SELF:-/usr/libexec/warp-autotune}
+ACCOUNT=/etc/warp/autotune-account.json
+PORT=18086
+child=
+guardian=
+conf_hash() { sha256sum /etc/warp/awg.conf /etc/config/warp | sha256sum | cut -d' ' -f1; }
+value() { sed -n "s/^$1 = //p" "$WORK/baseline.conf" | head -n 1; }
+proxy_stop() {
+    if [ -n "$child" ]; then kill "$child" 2>/dev/null || true; wait "$child" 2>/dev/null || true; child=; fi
+    if [ -n "$guardian" ]; then kill "$guardian" 2>/dev/null || true; wait "$guardian" 2>/dev/null || true; guardian=; fi
+}
+port_inode() { awk '$2=="0100007F:46A6" && $4=="0A" {print $10}' /proc/net/tcp; }
+proxy_owned() {
+    inode=$(port_inode)
+    [ -n "$inode" ] || return 1
+    for fd in /proc/"$child"/fd/*; do
+        [ "$(readlink "$fd" 2>/dev/null)" != "socket:[$inode]" ] || return 0
+    done
+    return 1
+}
+snapshot_auto() (
+    set +u
+    . /usr/share/libubox/jshn.sh
+    json_init; json_add_boolean ok 1
+    for key in state reason selection; do json_add_string "$key" "$(get "$key")"; done
+    for key in minutes elapsed started_at current; do json_add_int "$key" "$(get "$key")"; done
+    json_add_array candidates
+    if [ -s "$WORK/ranked" ]; then
+        while IFS='|' read -r cid ep jc total good restricted errors p95 speed checks failures rounds; do
+            json_add_object
+            json_add_int id "$cid"; json_add_string endpoint "$ep"; json_add_int jc "$jc"
+            note=$(get "note-$cid")
+            if [ "$checks" = 0 ]; then failures=0; [ -n "$note" ] || note=precheck_failed; fi
+            json_add_string note "$note"
+            for key in total good restricted errors p95 speed checks failures rounds; do
+                case "$key" in
+                    total) v=$total;; good) v=$good;; restricted) v=$restricted;; errors) v=$errors;;
+                    p95) v=$p95;; speed) v=$speed;; checks) v=$checks;; failures) v=$failures;; rounds) v=$rounds;;
+                esac
+                json_add_int "$key" "$v"
+            done
+            json_add_array services
+            if [ -s "$WORK/samples-$cid" ]; then
+                awk -F'|' -f "$DATA/score.awk" "$WORK/samples-$cid" > "$WORK/service-score.tmp"
+                while IFS='|' read -r service st sg sr sd sn sh sm sp sl sc; do
+                    json_add_object
+                    json_add_string id "$service"; json_add_int total "$st"; json_add_int good "$sg"
+                    json_add_int restricted "$sr"; json_add_int errors "$((sd+sn+sh))"
+                    json_add_int p95_ms "$sp"; json_close_object
+                done < "$WORK/service-score.tmp"
+            fi
+            json_close_array
+            json_close_object
+        done < "$WORK/ranked"
+    fi
+    json_close_array; json_dump > "$WORK/status.tmp"; mv "$WORK/status.tmp" "$WORK/status.json"
+    set -u
+)
+rank_results() {
+    # Availability precedes throughput. Never reward a fast failed/blocked request.
+    awk -F'|' '{
+        eligible=($11==0 && $10>=3 && $12>=3 && $4>0);
+        coverage=($4 ? $5/$4 : 0); reliability=($4 ? 1-$7/$4 : 0);
+        speed=($9<999999999 ? $9 : 999999999); latency=999999999-$8;
+        printf "%d%07d%07d%09d%09d|%s\n",eligible,coverage*1000000,reliability*1000000,speed,latency,$0
+    }' "$WORK/results" | LC_ALL=C sort -r | cut -d'|' -f2- > "$WORK/ranked"
+}
+record_candidate() {
+    awk -F'|' -f "$DATA/score.awk" "$WORK/samples" > "$WORK/candidate.score"
+    stats=$(awk -F'|' '{t+=$2;g+=$3;r+=$4;e+=$5+$6+$7;if($9>p)p=$9} END{printf "%d|%d|%d|%d|%d",t,g,r,e,p}' "$WORK/candidate.score")
+    rate=$(sort -n "$WORK/speeds" | awk '{a[NR]=$1} END{if(NR)print a[int((NR+1)/2)];else print 0}')
+    measured_rounds=$(awk -v n="$(get probes_per_round)" 'END {print (n>0 ? int(NR/n) : 0)}' "$WORK/samples")
+    printf '%s|%s|%s|%s|%s|%s|%s|%s\n' "$candidate" "$candidate_ep" "$candidate_jc" "$stats" "$rate" "$checks" "$failures" "$measured_rounds" >> "$WORK/results"
+    cp "$WORK/samples" "$WORK/samples-$candidate"
+    rank_results
+}
+auto_worker() {
+    [ "$(readlink /proc/self/fd/7 2>/dev/null)" = "$LOCK" ] && flock -n 7 || exit 1
+    put pid $$; put stamp "$(stamp $$)"
+    started=$(monotime); end=$((started+$(get minutes)*60)); deadline=$end
+    finish_auto() {
+        trap - EXIT
+        proxy_stop
+        [ "$(get state)" != running ] || { put state interrupted; put reason worker_interrupted; }
+        put elapsed "$(($(monotime)-started))"; snapshot_auto
+    }
+    trap finish_auto EXIT; trap 'exit 1' HUP INT TERM
+    if [ ! -s "$ACCOUNT" ]; then
+        put reason registering_test_account; snapshot_auto
+        GOMAXPROCS=1 GOMEMLIMIT=24MiB /usr/libexec/warp-limit 60 /usr/libexec/warp-warpscout register --plain --relay none --interface "$(get wan)" --account "$ACCOUNT" > "$WORK/register.log" 2>&1 || {
+            put state error; put reason registration_failed; exit 1;
+        }
+    fi
+    [ -s "$ACCOUNT" ] || { put state error; put reason registration_failed; exit 1; }
+    [ "$(jsonfilter -i "$ACCOUNT" -e '@.private_key')" != "$(value PrivateKey)" ] || { put state error; put reason account_not_isolated; exit 1; }
+    put reason ''; snapshot_auto
+    slot_seconds=$(((end-$(monotime))/6))
+    WARP_TEST_SOCKS=socks5h://127.0.0.1:$PORT
+    while IFS='|' read -r candidate candidate_ep candidate_jc; do
+        [ ! -e "$WORK/stop" ] || break
+        [ "$(conf_hash)" = "$(get baseline_hash)" ] || { put state changed; put reason configuration_changed; exit 0; }
+        [ -z "$(port_inode)" ] || { put state error; put reason test_port_busy; exit 0; }
+        [ "$(awk '/MemAvailable/ {print $2}' /proc/meminfo)" -ge 65536 ] || { put state error; put reason low_memory; exit 0; }
+        put current "$candidate"; snapshot_auto
+        deadline=$(($(monotime)+slot_seconds)); [ "$deadline" -gt "$(monotime)" ] || break
+        : > "$WORK/samples"; : > "$WORK/speeds"
+        put "note-$candidate" ''
+        checks=0; failures=0; rounds=0
+        # Apply the same edge country/node exclusions as the live manager.
+        set -- scan --plain --account "$ACCOUNT" --proto awg --i1 "$(value I1)" \
+            --jc "$candidate_jc" --jmin "$(value Jmin)" --jmax "$(value Jmax)" \
+            --target "${candidate_ep%:*}" --port "${candidate_ep##*:}" --sample 1 \
+            --tunnel-jobs 1 --tun-ping-count 5 --no-report --best --interface "$(get wan)"
+        countries=$(uci -q get warp.main.exclude_countries || true)
+        nodes=$(uci -q get warp.main.exclude_nodes || true)
+        [ -z "$countries" ] || set -- "$@" --exclude-country "$countries"
+        [ -z "$nodes" ] || set -- "$@" --exclude-node "$nodes"
+        accepted=$(GOMAXPROCS=1 GOMEMLIMIT=24MiB /usr/libexec/warp-limit 30 /usr/libexec/warp-warpscout "$@" 2> "$WORK/precheck.log") || accepted=
+        if [ "$accepted" != "$candidate_ep" ]; then
+            put "note-$candidate" precheck_failed; record_candidate; snapshot_auto; continue
+        fi
+        GOMAXPROCS=1 GOMEMLIMIT=24MiB /usr/libexec/warp-warpscout socks --account "$ACCOUNT" --endpoint "$candidate_ep" --proto awg \
+            --i1 "$(value I1)" --jc "$candidate_jc" --jmin "$(value Jmin)" --jmax "$(value Jmax)" \
+            --listen 127.0.0.1 --port "$PORT" --interface "$(get wan)" > "$WORK/proxy.log" 2>&1 &
+        child=$!
+        owner=$$; owner_stamp=$(stamp $$); child_stamp=$(stamp "$child")
+        (
+            while [ "$(monotime)" -lt "$deadline" ] && [ "$(stamp "$owner")" = "$owner_stamp" ]; do sleep 1; done
+            [ "$(stamp "$child")" != "$child_stamp" ] || kill "$child" 2>/dev/null || true
+        ) 7>&- &
+        guardian=$!
+        wait_n=0
+        while [ "$wait_n" -lt 10 ] && ! stopping && kill -0 "$child" 2>/dev/null; do
+            proxy_owned && break
+            sleep 1; wait_n=$((wait_n+1))
+        done
+        if ! proxy_owned; then
+            put "note-$candidate" proxy_start_failed; proxy_stop; record_candidate; snapshot_auto; continue
+        fi
+        while ! stopping; do
+            [ "$(conf_hash)" = "$(get baseline_hash)" ] || { put state changed; put reason configuration_changed; exit 0; }
+            cycle=$(monotime); rounds=$((rounds+1)); checks=$((checks+1))
+            remaining || break
+            if ! probe_curl -4fsS --connect-timeout 4 --max-time "$left" --max-filesize 16384 https://1.1.1.1/cdn-cgi/trace 2>/dev/null | grep -Eq '^warp=(on|plus)$'; then failures=$((failures+1)); fi
+            while IFS='|' read -r id label host url; do
+                stopping && break
+                case ",$(get selection)," in *",$id,"*) probe "$id" "$host" "$url";; esac
+            done < "$DATA/services.tsv"
+            # Exactly two small downloads per candidate, at most 12 MiB per run.
+            if [ "$rounds" -le 2 ] && remaining; then
+                measurement=$(probe_curl -4fsS --connect-timeout 4 --max-time "$left" --max-filesize 1048576 --output /dev/null \
+                    --write-out '%{size_download}|%{speed_download}' 'https://speed.cloudflare.com/__down?bytes=1048576' 2>/dev/null) &&
+                    printf '%s\n' "$measurement" | awk -F'|' '$1==1048576 {printf "%.0f\n",$2}' >> "$WORK/speeds"
+            fi
+            put elapsed "$(($(monotime)-started))"; snapshot_auto
+            while [ "$(monotime)" -lt "$((cycle+30))" ] && ! stopping; do sleep 1; done
+        done
+        proxy_stop; record_candidate; snapshot_auto
+    done < "$WORK/candidates"
+    if [ -e "$WORK/stop" ]; then put state stopped; else put state complete; fi
+}
+[ "${WARP_AUTOTUNE_LIBRARY:-0}" != 1 ] || return 0
+case "${1:-}" in
+start)
+    minutes=${2:-}; selection=${3:-}
+    case "$minutes" in 15|30|45|60) ;; *) answer false invalid_duration; exit 1;; esac
+    valid_selection "$selection" || { answer false invalid_selection; exit 1; }
+    exec 6>>"$LOCK.control"; flock -n 6 || { answer false test_busy; exit; }
+    exec 7>>"$LOCK"; flock -n 7 || { answer false test_busy; exit; }
+    warp_operation_acquire || { answer false operation_in_progress; exit; }
+    iface=$(uci -q get warp.main.actual_interface)
+    [ "$(uci -q get "network.$iface.warp_managed")" = luci-app-warp ] && [ -e "/sys/class/net/$iface/tun_flags" ] || { answer false managed_interface_missing; exit; }
+    ep=$(/usr/libexec/warp-awgctl get "$iface" endpoint)
+    real_ipv4 "${ep%:*}" || { answer false invalid_endpoint; exit; }
+    wan=$(ip -4 route get "${ep%:*}" | awk '{for(i=1;i<=NF;i++)if($i=="dev")print $(i+1)}' | head -n 1)
+    printf '%s' "$wan" | grep -Eq '^[A-Za-z_][A-Za-z0-9_.-]{0,14}$' && [ "$wan" != "$iface" ] || { answer false invalid_wan; exit; }
+    [ -z "$(port_inode)" ] || { answer false test_port_busy; exit; }
+    cp /etc/warp/awg.conf "$WORK/baseline.conf"
+    put baseline_hash "$(conf_hash)"; put wan "$wan"; put interface "$iface"
+    put probes_per_round "$(awk -F'|' -v s=",$selection," 'index(s,"," $1 ",") {n++} END{print n+0}' "$DATA/services.tsv")"
+    : > "$WORK/candidates"; cid=0
+    # Current endpoint, alternate port, alternate Cloudflare pool. No broad sweep.
+    alt_port=500; [ "${ep##*:}" != 500 ] || alt_port=4500
+    alt_ip=188.114.98.55; [ "${ep%:*}" != "$alt_ip" ] || alt_ip=162.159.193.55
+    alt_jc=12; [ "$(value Jc)" != 12 ] || alt_jc=6
+    for target in "$ep" "${ep%:*}:$alt_port" "$alt_ip:2408"; do
+        for junk in "$(value Jc)" "$alt_jc"; do cid=$((cid+1)); printf '%s|%s|%s\n' "$cid" "$target" "$junk" >> "$WORK/candidates"; done
+    done
+    rm -f "$WORK/stop"; : > "$WORK/results"; : > "$WORK/ranked"
+    put state running; put reason ''; put minutes "$minutes"; put selection "$selection"; put elapsed 0; put current 0
+    put started_at "$(date +%s)"; put pid $$; put stamp "$(stamp $$)"; snapshot_auto
+    setsid "$SELF" worker 9>&- 6>&- </dev/null > "$WORK/worker.log" 2>&1 &
+    n=0; while [ "$(get pid)" = "$$" ] && [ "$n" -lt 3 ]; do sleep 1; n=$((n+1)); done
+    answer true started;;
+worker) auto_worker;;
+status)
+    if [ ! -s "$WORK/status.json" ]; then echo '{"ok":true,"state":"idle","candidates":[]}'
+    elif [ "$(get state)" = running ] && ! alive; then sed 's/"state": "running"/"state": "interrupted"/' "$WORK/status.json"
+    elif [ "$(get state)" = running ] && [ -e "$WORK/stop" ]; then sed 's/"state": "running"/"state": "stopping"/' "$WORK/status.json"
+    else cat "$WORK/status.json"; fi;;
+stop)
+    exec 6>>"$LOCK.control"; flock -n 6 || { answer false test_busy; exit; }
+    if alive && [ "$(get state)" = running ]; then touch "$WORK/stop"; answer true stopping; else answer true already_stopped; fi;;
+apply)
+    choice=${2:-}
+    case "$choice" in 1|2|3|4|5|6) ;; *) answer false invalid_candidate; exit 1;; esac
+    exec 7>>"$LOCK"; flock -n 7 || { answer false test_busy; exit; }
+    warp_operation_acquire || { answer false operation_in_progress; exit; }
+    [ "$(get state)" = complete ] || { answer false incomplete_test; exit; }
+    [ "$(conf_hash)" = "$(get baseline_hash)" ] || { answer false configuration_changed; exit; }
+    chosen=$(awk -F'|' -v c="$choice" '$1==c && $10>=3 && $11==0 && $12>=3 && $5>0 {print $1}' "$WORK/ranked")
+    [ "$chosen" = "$choice" ] || { answer false unqualified_candidate; exit; }
+    candidate_ep=$(awk -F'|' -v c="$choice" '$1==c {print $2}' "$WORK/candidates")
+    candidate_jc=$(awk -F'|' -v c="$choice" '$1==c {print $3}' "$WORK/candidates")
+    iface=$(get interface)
+    [ "$(uci -q get warp.main.actual_interface)" = "$iface" ] && [ -e "/sys/class/net/$iface/tun_flags" ] || { answer false managed_interface_missing; exit; }
+    [ ! -e /etc/warp/disabled ] || { answer false managed_interface_missing; exit; }
+    if [ "$candidate_ep" = "$(value Endpoint)" ] && [ "$candidate_jc" = "$(value Jc)" ]; then answer true already_applied; exit; fi
+    awk -v ep="$candidate_ep" -v jc="$candidate_jc" '/^Endpoint = / {$0="Endpoint = " ep} /^Jc = / {$0="Jc = " jc} {print}' "$WORK/baseline.conf" > "$WORK/apply.conf"
+    cp /etc/warp/awg.conf /etc/warp/autotune-previous.conf || { answer false backup_failed; exit; }
+    # Reconfigure only the existing peer; no netifd/Podkop reload or service restart.
+    rollback_apply() {
+        /usr/libexec/warp-awgctl setconf "$iface" /etc/warp/autotune-previous.conf >/dev/null 2>&1 &&
+            cp /etc/warp/autotune-previous.conf /etc/warp/awg.conf
+    }
+    rm -f "$WORK/apply-committed"
+    # Inherit both locks. SIGKILL of the RPC worker still leaves a bounded rollback.
+    ( sleep 20 7>&- 9>&-; [ -e "$WORK/apply-committed" ] || rollback_apply ) </dev/null >/dev/null 2>&1 &
+    apply_guard=$!
+    close_guard() { kill "$apply_guard" 2>/dev/null || true; wait "$apply_guard" 2>/dev/null || true; }
+    trap 'rollback_apply; close_guard; exit 1' HUP INT TERM
+    if /usr/libexec/warp-awgctl setconf "$iface" "$WORK/apply.conf" >/dev/null 2>&1 &&
+        /usr/libexec/warp-probe "$iface" > "$WORK/apply-probe.json" 2>/dev/null; then
+        if cp "$WORK/apply.conf" /etc/warp/.autotune-next && mv /etc/warp/.autotune-next /etc/warp/awg.conf; then
+            touch "$WORK/apply-committed"; trap - HUP INT TERM; close_guard; answer true applied
+        else rollback_apply && answer false persist_failed || answer false rollback_failed; close_guard; fi
+    else rollback_apply && answer false candidate_failed_rolled_back || answer false rollback_failed; close_guard; fi;;
+*) answer false invalid_action; exit 1;;
+esac

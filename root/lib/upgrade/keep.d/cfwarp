@@ -2,3 +2,5 @@
 /etc/warp/awg-account.json
 /etc/warp/awg.conf
 /etc/warp/disabled
+/etc/warp/autotune-account.json
+/etc/warp/autotune-previous.conf

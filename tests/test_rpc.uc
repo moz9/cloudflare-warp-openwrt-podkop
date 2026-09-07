@@ -7,4 +7,7 @@ check(m.test_status.call().ok === true, 'test_status runtime closure');
 check(m.test_start.call({args:{minutes:5,services:'youtube'}}).code === 'invalid_duration', 'duration validation');
 check(m.test_start.call({args:{minutes:15,services:'youtube;id'}}).code === 'invalid_selection', 'RPC argument injection');
 check(m.test_start.call({args:{minutes:15,services:''}}).code === 'invalid_selection', 'empty selection');
+check(m.autotune_status.call().ok === true, 'autotune status');
+check(m.autotune_apply.call({args:{candidate:7}}).code === 'invalid_candidate', 'candidate whitelist');
+check(m.autotune_start.call({args:{minutes:15,services:'youtube;id'}}).code === 'invalid_selection', 'autotune injection');
 print('PASS: RPC runtime closure and input validation\n');

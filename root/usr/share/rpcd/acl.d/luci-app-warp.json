@@ -1,17 +1,38 @@
 {
-	"luci-app-warp": {
-		"description": "View and manage the standalone WARP interface",
-		"read": {
-			"ubus": {
-                "luci.warp": [ "status", "test_status" ]
-			},
-			"uci": [ "warp" ]
-		},
-		"write": {
-			"ubus": {
-                "luci.warp": [ "register", "enable", "disable", "reconnect", "unregister", "check", "attach", "test_start", "test_stop" ]
-			},
-			"uci": [ "warp" ]
-		}
-	}
+  "luci-app-warp": {
+    "description": "View and manage the standalone WARP interface",
+    "read": {
+      "ubus": {
+        "luci.warp": [
+          "status",
+          "test_status",
+          "autotune_status"
+        ]
+      },
+      "uci": [
+        "warp"
+      ]
+    },
+    "write": {
+      "ubus": {
+        "luci.warp": [
+          "register",
+          "enable",
+          "disable",
+          "reconnect",
+          "unregister",
+          "check",
+          "attach",
+          "test_start",
+          "test_stop",
+          "autotune_start",
+          "autotune_stop",
+          "autotune_apply"
+        ]
+      },
+      "uci": [
+        "warp"
+      ]
+    }
+  }
 }

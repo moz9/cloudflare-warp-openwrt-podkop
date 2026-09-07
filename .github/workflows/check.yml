@@ -28,6 +28,8 @@ jobs:
         run: sh tests/test_concurrency.sh "$PWD/root/usr/libexec/warp-common"
       - name: Check stability result classification
         run: python tests/test_stability.py
+      - name: Check autotune ranking
+        run: python tests/test_autotune.py
       - uses: actions/upload-artifact@v4
         with:
           name: opkg-aarch64-cortex-a53

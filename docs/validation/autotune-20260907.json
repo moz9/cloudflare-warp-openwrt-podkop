@@ -1,0 +1,373 @@
+{
+  "ok": true,
+  "state": "complete",
+  "reason": "",
+  "selection": "google,google_ai,chatgpt,youtube,google_play,discord,telegram,cloudflare",
+  "minutes": 15,
+  "elapsed": 604,
+  "started_at": 1788784760,
+  "current": 6,
+  "candidates": [
+    {
+      "id": 3,
+      "endpoint": "162.159.192.55:500",
+      "jc": 6,
+      "note": "",
+      "total": 60,
+      "good": 50,
+      "restricted": 10,
+      "errors": 0,
+      "p95": 1514,
+      "speed": 1007595,
+      "checks": 5,
+      "failures": 0,
+      "rounds": 5,
+      "services": [
+        {
+          "id": "google_play",
+          "total": 5,
+          "good": 5,
+          "restricted": 0,
+          "errors": 0,
+          "p95_ms": 573
+        },
+        {
+          "id": "google",
+          "total": 10,
+          "good": 10,
+          "restricted": 0,
+          "errors": 0,
+          "p95_ms": 571
+        },
+        {
+          "id": "google_ai",
+          "total": 10,
+          "good": 10,
+          "restricted": 0,
+          "errors": 0,
+          "p95_ms": 1514
+        },
+        {
+          "id": "chatgpt",
+          "total": 10,
+          "good": 0,
+          "restricted": 10,
+          "errors": 0,
+          "p95_ms": 527
+        },
+        {
+          "id": "cloudflare",
+          "total": 5,
+          "good": 5,
+          "restricted": 0,
+          "errors": 0,
+          "p95_ms": 616
+        },
+        {
+          "id": "telegram",
+          "total": 5,
+          "good": 5,
+          "restricted": 0,
+          "errors": 0,
+          "p95_ms": 637
+        },
+        {
+          "id": "youtube",
+          "total": 10,
+          "good": 10,
+          "restricted": 0,
+          "errors": 0,
+          "p95_ms": 572
+        },
+        {
+          "id": "discord",
+          "total": 5,
+          "good": 5,
+          "restricted": 0,
+          "errors": 0,
+          "p95_ms": 493
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "endpoint": "162.159.192.55:500",
+      "jc": 12,
+      "note": "",
+      "total": 60,
+      "good": 50,
+      "restricted": 10,
+      "errors": 0,
+      "p95": 718,
+      "speed": 963947,
+      "checks": 5,
+      "failures": 0,
+      "rounds": 5,
+      "services": [
+        {
+          "id": "google_play",
+          "total": 5,
+          "good": 5,
+          "restricted": 0,
+          "errors": 0,
+          "p95_ms": 575
+        },
+        {
+          "id": "google",
+          "total": 10,
+          "good": 10,
+          "restricted": 0,
+          "errors": 0,
+          "p95_ms": 555
+        },
+        {
+          "id": "google_ai",
+          "total": 10,
+          "good": 10,
+          "restricted": 0,
+          "errors": 0,
+          "p95_ms": 718
+        },
+        {
+          "id": "chatgpt",
+          "total": 10,
+          "good": 0,
+          "restricted": 10,
+          "errors": 0,
+          "p95_ms": 499
+        },
+        {
+          "id": "cloudflare",
+          "total": 5,
+          "good": 5,
+          "restricted": 0,
+          "errors": 0,
+          "p95_ms": 646
+        },
+        {
+          "id": "telegram",
+          "total": 5,
+          "good": 5,
+          "restricted": 0,
+          "errors": 0,
+          "p95_ms": 651
+        },
+        {
+          "id": "youtube",
+          "total": 10,
+          "good": 10,
+          "restricted": 0,
+          "errors": 0,
+          "p95_ms": 559
+        },
+        {
+          "id": "discord",
+          "total": 5,
+          "good": 5,
+          "restricted": 0,
+          "errors": 0,
+          "p95_ms": 475
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "endpoint": "162.159.192.55:2408",
+      "jc": 12,
+      "note": "",
+      "total": 60,
+      "good": 50,
+      "restricted": 10,
+      "errors": 0,
+      "p95": 736,
+      "speed": 939976,
+      "checks": 5,
+      "failures": 0,
+      "rounds": 5,
+      "services": [
+        {
+          "id": "google_play",
+          "total": 5,
+          "good": 5,
+          "restricted": 0,
+          "errors": 0,
+          "p95_ms": 510
+        },
+        {
+          "id": "google",
+          "total": 10,
+          "good": 10,
+          "restricted": 0,
+          "errors": 0,
+          "p95_ms": 550
+        },
+        {
+          "id": "google_ai",
+          "total": 10,
+          "good": 10,
+          "restricted": 0,
+          "errors": 0,
+          "p95_ms": 736
+        },
+        {
+          "id": "chatgpt",
+          "total": 10,
+          "good": 0,
+          "restricted": 10,
+          "errors": 0,
+          "p95_ms": 522
+        },
+        {
+          "id": "cloudflare",
+          "total": 5,
+          "good": 5,
+          "restricted": 0,
+          "errors": 0,
+          "p95_ms": 628
+        },
+        {
+          "id": "telegram",
+          "total": 5,
+          "good": 5,
+          "restricted": 0,
+          "errors": 0,
+          "p95_ms": 634
+        },
+        {
+          "id": "youtube",
+          "total": 10,
+          "good": 10,
+          "restricted": 0,
+          "errors": 0,
+          "p95_ms": 527
+        },
+        {
+          "id": "discord",
+          "total": 5,
+          "good": 5,
+          "restricted": 0,
+          "errors": 0,
+          "p95_ms": 478
+        }
+      ]
+    },
+    {
+      "id": 1,
+      "endpoint": "162.159.192.55:2408",
+      "jc": 6,
+      "note": "",
+      "total": 60,
+      "good": 50,
+      "restricted": 10,
+      "errors": 0,
+      "p95": 2021,
+      "speed": 628696,
+      "checks": 5,
+      "failures": 0,
+      "rounds": 5,
+      "services": [
+        {
+          "id": "google_play",
+          "total": 5,
+          "good": 5,
+          "restricted": 0,
+          "errors": 0,
+          "p95_ms": 844
+        },
+        {
+          "id": "google",
+          "total": 10,
+          "good": 10,
+          "restricted": 0,
+          "errors": 0,
+          "p95_ms": 2021
+        },
+        {
+          "id": "google_ai",
+          "total": 10,
+          "good": 10,
+          "restricted": 0,
+          "errors": 0,
+          "p95_ms": 1866
+        },
+        {
+          "id": "chatgpt",
+          "total": 10,
+          "good": 0,
+          "restricted": 10,
+          "errors": 0,
+          "p95_ms": 1607
+        },
+        {
+          "id": "cloudflare",
+          "total": 5,
+          "good": 5,
+          "restricted": 0,
+          "errors": 0,
+          "p95_ms": 1815
+        },
+        {
+          "id": "telegram",
+          "total": 5,
+          "good": 5,
+          "restricted": 0,
+          "errors": 0,
+          "p95_ms": 1973
+        },
+        {
+          "id": "youtube",
+          "total": 10,
+          "good": 10,
+          "restricted": 0,
+          "errors": 0,
+          "p95_ms": 1575
+        },
+        {
+          "id": "discord",
+          "total": 5,
+          "good": 5,
+          "restricted": 0,
+          "errors": 0,
+          "p95_ms": 1034
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "endpoint": "188.114.98.55:2408",
+      "jc": 12,
+      "note": "precheck_failed",
+      "total": 0,
+      "good": 0,
+      "restricted": 0,
+      "errors": 0,
+      "p95": 0,
+      "speed": 0,
+      "checks": 0,
+      "failures": 0,
+      "rounds": 0,
+      "services": []
+    },
+    {
+      "id": 5,
+      "endpoint": "188.114.98.55:2408",
+      "jc": 6,
+      "note": "precheck_failed",
+      "total": 0,
+      "good": 0,
+      "restricted": 0,
+      "errors": 0,
+      "p95": 0,
+      "speed": 0,
+      "checks": 0,
+      "failures": 0,
+      "rounds": 0,
+      "services": []
+    }
+  ],
+  "date": "2026-09-07",
+  "device": "Redmi AX6",
+  "configs_unchanged": true,
+  "other_service_pids_unchanged": true,
+  "live_winner_applied": false
+}

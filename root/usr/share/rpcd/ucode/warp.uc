@@ -50,7 +50,35 @@ function testRun(args) {
     return { ok: false, code: 'invalid_manager_response' };
 }
 
+function autoRun(args) {
+    const fd = popen('/usr/libexec/warp-autotune ' + args, 'r');
+    if (!fd) return { ok: false, code: 'manager_unavailable' };
+    const output = fd.read('all');
+    fd.close();
+    try {
+        const result = json(trim(output));
+        if (type(result) == 'object' && type(result.ok) == 'bool') return result;
+    } catch (e) {}
+    return { ok: false, code: 'invalid_manager_response' };
+}
+
+const autoMethods = {
+    autotune_status: { call: function() { return autoRun('status'); } },
+    autotune_stop: { call: function() { return autoRun('stop'); } },
+    autotune_apply: { args: { candidate: 0 }, call: function(request) {
+        const c=request.args.candidate;
+        if (c < 1 || c > 6 || int(c) != c) return {ok:false,code:'invalid_candidate'};
+        return autoRun('apply ' + c);
+    } },
+    autotune_start: { args: { minutes:15, services:'' }, call: function(request) {
+        const m=request.args.minutes, s=request.args.services;
+        if (m != 15 && m != 30 && m != 45 && m != 60) return {ok:false,code:'invalid_duration'};
+        if (type(s) != 'string' || length(s)>128 || !match(s,/^[a-z_,]+$/)) return {ok:false,code:'invalid_selection'};
+        return autoRun('start ' + m + ' ' + s);
+    } }
+};
 const methods = {
+    ...autoMethods,
     test_status: { call: function() { return testRun('status'); } },
     test_stop: { call: function() { return testRun('stop'); } },
     test_start: {
