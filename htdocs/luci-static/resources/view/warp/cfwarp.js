@@ -16,6 +16,7 @@ const testProfiles = [
     ['google_play', 'Google Play', false], ['discord', 'Discord', false],
     ['telegram', 'Telegram', false], ['cloudflare', 'Cloudflare', false]
 ];
+const testColumns = ['Сервис','Успешные HTTP','Ограничения / вход','Ошибки','Задержка: обычная / 95%','Последний ответ'];
 const actions = {};
 ['enable', 'disable', 'reconnect', 'check', 'attach'].forEach(function(a) {
     actions[a] = rpc.declare({ object: 'luci.warp', method: a });
@@ -71,6 +72,7 @@ return view.extend({
             return this.testAction(testStopRPC);
         },this)}, 'Остановить');
         return E('div', {}, [
+            E('style',{},'@media(max-width:600px){.warp-test-table td::before{content:attr(data-label);display:block;font-weight:600;opacity:.7;margin-bottom:3px}}'),
             E('h2', {}, 'Проверка стабильности CF WARP'),
             E('p', {}, 'Проверяет текущий узел в течение выбранного времени. Работает в фоне при закрытой странице, не меняет списки Podkop и не перезапускает службы.'),
             E('p', {}, 'Профили соответствуют крупным сервисам из списков Podkop; Google и ChatGPT — дополнительные профили. Проверяются основные адреса, а не каждый домен списка.'),
@@ -79,8 +81,8 @@ return view.extend({
             },this))),
             E('div', {style:'display:flex;flex-wrap:wrap;gap:12px;align-items:center'}, [this.testDuration,this.testStart,this.testStop]),
             this.testProgress,
-            E('div', {style:'overflow-x:auto'}, E('table', {class:'table'}, [
-                E('thead', {}, E('tr', {}, ['Сервис','Успешные HTTP','Ограничения / вход','Ошибки','Задержка: обычная / 95%','Последний ответ'].map(function(t) {return E('th',{},t);}))),
+            E('div', {style:'overflow-x:auto'}, E('table', {class:'table warp-test-table'}, [
+                E('thead', {}, E('tr', {}, testColumns.map(function(t) {return E('th',{},t);}))),
                 this.testRows
             ])),
             E('p', {}, 'Успешные HTTP — ответы 2xx/3xx, включая перенаправления на вход. Ответы 401, 403 и 429 показаны отдельно: возможны вход в аккаунт, антибот, региональный запрет или лимит запросов. Это не подтверждение работы чата или воспроизведения видео.'),
@@ -114,12 +116,13 @@ return view.extend({
             if (running) this.testDuration.value=String(s.minutes);
             const names = Object.fromEntries(testProfiles.map(function(p) {return [p[0],p[1]];}));
             const last = {ok:'Ответ получен',restricted:'Ограничение / вход',dns:'Ошибка DNS',network:'Ошибка соединения',http:'Ошибка HTTP'};
-            this.testRows.replaceChildren.apply(this.testRows,(s.services || []).map(function(r) {
+            const order=testProfiles.map(function(p){return p[0];});
+            this.testRows.replaceChildren.apply(this.testRows,(s.services || []).slice().sort(function(a,b){return order.indexOf(a.id)-order.indexOf(b.id);}).map(function(r) {
                 const errors = r.dns+r.network+r.http;
                 return E('tr',{},[names[r.id] || r.id,r.good+' / '+r.total,String(r.restricted),
                     errors+' (DNS '+r.dns+', связь '+r.network+', HTTP '+r.http+')',
                     r.median_ms+' / '+r.p95_ms+' мс',(last[r.last] || r.last)+(r.http_code && r.http_code !== '000' ? ' · '+r.http_code : '')
-                ].map(function(t) {return E('td',{},t);}));
+                ].map(function(t,i) {return E('td',{'data-label':testColumns[i]},t);}));
             }));
         },this));
     },
@@ -206,7 +209,11 @@ return view.extend({
             ]);
             const tester = this.renderTester();
             tester.hidden = true;
-            const switchTab = function(which) {root.hidden=which!=='main'; tester.hidden=which!=='test';};
+            const switchTab = function(which) {
+                root.hidden=which!=='main'; tester.hidden=which!=='test';
+                const saveActions=document.querySelector('.cbi-page-actions');
+                if(saveActions) saveActions.hidden=which!=='main';
+            };
             const tabs = E('div', {style:'display:flex;gap:8px;margin:12px 0'}, [
                 E('button',{class:'btn',click:function(){switchTab('main');}},'Подключение'),
                 E('button',{class:'btn',click:function(){switchTab('test');}},'Проверка стабильности')

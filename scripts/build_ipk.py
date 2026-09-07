@@ -52,6 +52,9 @@ def build(backend, out):
     files = []
     installed = []
     sizes = []
+    ui = ROOT / 'htdocs/luci-static/resources/view/warp/cfwarp.js'
+    ui_data = ui.read_bytes().replace(b'\r\n', b'\n')
+    view_name = 'warp/cfwarp_' + VERSION.replace('.', '_') + '_' + hashlib.sha256(ui_data).hexdigest()[:8]
     expected = {
         # Hashes of the Go binaries extracted from checksum-verified v3.0.0 APKs.
         # Controller is built from the modified source and checked on the target.
@@ -81,12 +84,11 @@ def build(backend, out):
             data = path.read_bytes().replace(b'\r\n', b'\n')
             if name == 'usr/share/luci/menu.d/luci-app-warp.json':
                 menu = json.loads(data)
-                menu['admin/network/warp']['action']['path'] = 'warp/cfwarp_' + VERSION.replace('.', '_')
+                menu['admin/network/warp']['action']['path'] = view_name
                 data = (json.dumps(menu, ensure_ascii=False, indent=2)+'\n').encode()
             entries.append((name, data, mode))
-    ui = ROOT / 'htdocs/luci-static/resources/view/warp/cfwarp.js'
     # Themes may pin resource_version. A versioned filename prevents a stale UI.
-    entries.append(('www/luci-static/resources/view/warp/cfwarp_' + VERSION.replace('.', '_') + '.js', ui.read_bytes().replace(b'\r\n', b'\n'), 0o644))
+    entries.append(('www/luci-static/resources/view/' + view_name + '.js', ui_data, 0o644))
     installed.extend(('/'+name, data) for name, data, _ in entries if not name.startswith('etc/config/'))
     files.append(package(out, 'luci-app-warp', 'all', entries,
                          'luci-base, rpcd-mod-ucode, curl, jsonfilter, warp-awg, warp-warpscout', ['/etc/config/warp']))
