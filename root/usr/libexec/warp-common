@@ -1,0 +1,43 @@
+#!/bin/sh
+# Never unlink this inode: all flock users must lock the same file.
+WARP_OPERATION_LOCK=${WARP_OPERATION_LOCK:-/var/lock/warp-operation.lock}
+# /var/lock is a symlink on OpenWrt. /proc/self/fd reports its canonical path.
+WARP_OPERATION_LOCK=$(readlink -f "$WARP_OPERATION_LOCK")
+warp_operation_acquire() {
+    command -v flock >/dev/null 2>&1 || return 1
+    if [ "$(readlink /proc/self/fd/9 2>/dev/null)" != "$WARP_OPERATION_LOCK" ]; then
+        exec 9>>"$WARP_OPERATION_LOCK" || return 1
+    fi
+    flock -n 9
+}
+warp_operation_busy() (
+    exec 8>>"$WARP_OPERATION_LOCK" || exit 0
+    flock -n 8 && exit 1
+    exit 0
+)
+
+# Compatible with the subscription/DNS mutation protocol. Do not steal stale
+# or incomplete ownership: Podkop itself handles its legacy stale-lock recovery.
+WARP_PODKOP_LOCK=${WARP_PODKOP_LOCK:-/tmp/podkop-subscription-action.lock.d}
+WARP_PODKOP_LEGACY=${WARP_PODKOP_LEGACY:-/tmp/podkop-subscription-action.lock}
+warp_podkop_acquire() {
+    [ ! -e "$WARP_PODKOP_LEGACY" ] || return 1
+    mkdir "$WARP_PODKOP_LOCK" 2>/dev/null || return 1
+    if ! printf '%s cfwarp %s\n' "$$" "$(date +%s)" >"$WARP_PODKOP_LOCK/owner"; then
+        rmdir "$WARP_PODKOP_LOCK" 2>/dev/null || true
+        return 1
+    fi
+    if ! (set -C; printf '%s cfwarp %s\n' "$$" "$(date +%s)" >"$WARP_PODKOP_LEGACY") 2>/dev/null; then
+        warp_podkop_release
+        return 1
+    fi
+}
+warp_podkop_release() {
+    if [ "$(awk 'NR==1 {print $1}' "$WARP_PODKOP_LEGACY" 2>/dev/null)" = "$$" ]; then
+        rm -f "$WARP_PODKOP_LEGACY"
+    fi
+    if [ "$(awk 'NR==1 {print $1}' "$WARP_PODKOP_LOCK/owner" 2>/dev/null)" = "$$" ]; then
+        rm -f "$WARP_PODKOP_LOCK/owner"
+        rmdir "$WARP_PODKOP_LOCK" 2>/dev/null || true
+    fi
+}

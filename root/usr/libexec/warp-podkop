@@ -2,8 +2,10 @@
 # Create an empty, dedicated section. Existing sections are never overwritten.
 set -eu
 umask 077
+. "${WARP_COMMON_LIB:-/usr/libexec/warp-common}"
 fail() { printf '{"ok":false,"code":"%s"}\n' "$1"; exit 1; }
 [ "${1:-}" = attach ] || fail invalid_action
+warp_operation_acquire || fail operation_in_progress
 [ -x /etc/init.d/podkop ] || fail podkop_missing
 [ -z "$(uci changes)" ] || fail pending_uci_changes
 iface=$(uci -q get warp.main.actual_interface) || fail managed_interface_missing
@@ -17,7 +19,8 @@ if uci -q get podkop.cfwarp >/dev/null; then
     printf '{"ok":true,"code":"already_attached"}\n'
     exit 0
 fi
-mkdir /var/lock/warp-podkop.lock 2>/dev/null || fail operation_in_progress
+warp_podkop_acquire || fail podkop_busy
+trap warp_podkop_release EXIT
 work=$(mktemp -d /tmp/warp-podkop.XXXXXX)
 committed=0
 success=0
@@ -26,11 +29,11 @@ cleanup() {
         # CAS rollback: leave later user changes alone.
         if [ "$(sha256sum /etc/config/podkop | cut -d ' ' -f1)" = "$after" ]; then
             cp "$work/podkop" /etc/config/podkop
-            /usr/bin/podkop reload >/dev/null 2>&1 || true
+            PODKOP_SUBSCRIPTION_CACHE_ONLY=1 PODKOP_SKIP_LIST_UPDATE=1 /usr/bin/podkop reload >/dev/null 2>&1 || true
         fi
     fi
     rm -rf "$work"
-    rmdir /var/lock/warp-podkop.lock 2>/dev/null || true
+    warp_podkop_release
 }
 trap cleanup EXIT
 trap 'exit 1' HUP INT TERM
@@ -53,7 +56,7 @@ cp "$work/podkop" /etc/warp/podkop-before-attach.conf
 uci -q -t "$work/uci" commit podkop
 after=$(sha256sum /etc/config/podkop | cut -d ' ' -f1)
 committed=1
-/usr/bin/podkop reload >/dev/null 2>&1 || fail podkop_restart_failed
+PODKOP_SUBSCRIPTION_CACHE_ONLY=1 PODKOP_SKIP_LIST_UPDATE=1 /usr/bin/podkop reload >/dev/null 2>&1 || fail podkop_restart_failed
 /etc/init.d/sing-box status >/dev/null 2>&1 || fail podkop_restart_failed
 nft list table inet PodkopTable >/dev/null 2>&1 || fail podkop_restart_failed
 success=1

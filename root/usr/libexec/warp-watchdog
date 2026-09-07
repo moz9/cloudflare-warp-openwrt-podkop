@@ -1,6 +1,7 @@
 #!/bin/sh
 
 set -u
+. "${WARP_COMMON_LIB:-/usr/libexec/warp-common}"
 
 STATE_DIR="${WARP_STATE_DIR:-/etc/warp}"
 DISABLED_FILE="$STATE_DIR/disabled"
@@ -22,6 +23,7 @@ log() {
 }
 
 while sleep "$INTERVAL"; do
+	warp_operation_busy && continue
 	[ ! -e "$DISABLED_FILE" ] || {
 		failures=0
 		last_rx=0

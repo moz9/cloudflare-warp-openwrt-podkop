@@ -1,0 +1,4 @@
+/etc/config/warp
+/etc/warp/awg-account.json
+/etc/warp/awg.conf
+/etc/warp/disabled

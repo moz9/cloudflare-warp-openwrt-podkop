@@ -19,6 +19,7 @@ const states = {
 const errors = {
     pending_uci_changes: 'Сначала сохраните или отмените несохранённые изменения LuCI.',
     operation_in_progress: 'Операция уже выполняется.',
+    podkop_busy: 'Podkop обновляет подписки или DNS. Повторите после завершения операции.',
     data_plane_unavailable: 'Проверка HTTPS через WARP не прошла.',
     endpoint_scan_failed: 'Рабочий узел не найден. Попробуйте другое маскирующее имя.',
     awg_registration_failed: 'Не удалось зарегистрировать WARP.',
@@ -66,7 +67,7 @@ return view.extend({
         return statusRPC().then(L.bind(function(s) {
             this.status = s;
             const rows = [
-                ['Состояние', s.busy ? 'Выполняется операция… ' + (s.started_at ? Math.max(0, Math.floor(Date.now()/1000)-Number(s.started_at)) + ' с' : '') : (states[s.state] || 'Неизвестно')],
+                ['Состояние', s.busy ? 'Выполняется операция… ' + (s.job_active && s.started_at ? Math.max(0, Math.floor(Date.now()/1000)-Number(s.started_at)) + ' с' : '') : (states[s.state] || 'Неизвестно')],
                 ['Интерфейс', s.interface || '—'],
                 ['Узел подключения', s.endpoint || '—'],
                 ['Секция Podkop', s.podkop_attached ? 'cfwarp — подключена' : 'Ещё не создана'],

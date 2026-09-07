@@ -42,6 +42,7 @@ class PackagingTests(unittest.TestCase):
         import shutil,subprocess
         sh=shutil.which('sh') or r'C:\Program Files\Git\bin\bash.exe'
         paths=list((ROOT/'root/usr/libexec').glob('warp-*'))+list((ROOT/'root/etc/init.d').glob('warp*'))+[ROOT/'install-podkop.sh']
+        paths += [ROOT/'tests/test_concurrency.sh', ROOT/'tests/router-coexistence.sh']
         for p in paths:
             subprocess.run([sh,'-n',str(p)],check=True,capture_output=True)
         subprocess.run(['node','--check',str(ROOT/'htdocs/luci-static/resources/view/warp/cfwarp.js')],check=True,capture_output=True)

@@ -1,6 +1,7 @@
 #!/bin/sh
 set -u
 umask 077
+. "${WARP_COMMON_LIB:-/usr/libexec/warp-common}"
 DIR=/tmp/warp-job
 LOCK=/var/lock/warp-job.lock
 mkdir -p "$DIR"
@@ -20,7 +21,8 @@ status)
     . /usr/share/libubox/jshn.sh
     state=$(/usr/libexec/warp-manager status)
     json_load "$state" || { printf '{"ok":false}\n'; exit; }
-    if alive; then json_add_boolean busy 1; else json_add_boolean busy 0; fi
+    if warp_operation_busy; then json_add_boolean busy 1; else json_add_boolean busy 0; fi
+    if alive; then json_add_boolean job_active 1; else json_add_boolean job_active 0; fi
     action=$(cat "$DIR/action" 2>/dev/null || true)
     json_add_string action "$action"
     started_at=$(cat "$DIR/started_at" 2>/dev/null || true)
@@ -41,10 +43,10 @@ status)
 start)
     action=${2:-}
     case "$action" in register|enable|disable|reconnect|unregister|check|attach) ;; *) echo '{"ok":false,"code":"invalid_action"}'; exit 1 ;; esac
+    warp_operation_acquire || { echo '{"ok":false,"code":"operation_in_progress"}'; exit 0; }
     if ! mkdir "$LOCK" 2>/dev/null; then
         if alive; then echo '{"ok":false,"code":"operation_in_progress"}'; exit 0; fi
-        # A just-created lock with no pid is still being handed to its worker.
-        if [ ! -s "$LOCK/pid" ]; then echo '{"ok":false,"code":"operation_in_progress"}'; exit 0; fi
+        # The flock admission lock rules out an active new-generation handoff.
         rm -f "$LOCK/pid" "$LOCK/stamp"
         rmdir "$LOCK" 2>/dev/null || exit 1
         mkdir "$LOCK" || exit 1
@@ -63,6 +65,9 @@ start)
     ;;
 worker)
     action=${2:-}
+    # Workers may only inherit admission from start, never seize another job.
+    [ "$(readlink /proc/self/fd/9 2>/dev/null)" = "$WARP_OPERATION_LOCK" ] || exit 1
+    warp_operation_acquire || exit 1
     echo $$ > "$LOCK/pid"; stamp $$ > "$LOCK/stamp"
     trap 'rm -f "$LOCK/pid" "$LOCK/stamp"; rmdir "$LOCK" 2>/dev/null || true' EXIT
     trap 'write_result '\''{"ok":false,"code":"interrupted"}'\''; exit 1' HUP INT TERM

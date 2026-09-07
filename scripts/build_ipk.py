@@ -11,7 +11,8 @@ from pathlib import Path
 import tarfile
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = '0.1.0'
+VERSION = '0.1.1'
+BACKEND_VERSION = '0.1.0'
 
 def archive(entries):
     stream = io.BytesIO()
@@ -32,8 +33,8 @@ def archive(entries):
             tar.addfile(info, io.BytesIO(data))
     return gzip.compress(stream.getvalue(), mtime=0)
 
-def package(out, name, arch, entries, depends, conffiles=()):
-    control = f'Package: {name}\nVersion: {VERSION}\nArchitecture: {arch}\nMaintainer: moz9\nSection: net\nPriority: optional\nLicense: Apache-2.0 MIT\nDepends: {depends}\nDescription: Cloudflare WARP OpenWrt Podkop integration\n'
+def package(out, name, arch, entries, depends, conffiles=(), version=VERSION):
+    control = f'Package: {name}\nVersion: {version}\nArchitecture: {arch}\nMaintainer: moz9\nSection: net\nPriority: optional\nLicense: Apache-2.0 MIT\nDepends: {depends}\nInstalled-Size: {sum(len(data) for _, data, _ in entries)}\nDescription: Cloudflare WARP OpenWrt Podkop integration\n'
     controls = [('control', control.encode(), 0o644)]
     if conffiles:
         controls.append(('conffiles', ('\n'.join(conffiles)+'\n').encode(), 0o644))
@@ -41,7 +42,7 @@ def package(out, name, arch, entries, depends, conffiles=()):
     result = archive([('debian-binary', b'2.0\n', 0o644),
                       ('control.tar.gz', archive(controls), 0o644),
                       ('data.tar.gz', archive(entries), 0o644)])
-    dest = out / f'{name}_{VERSION}_{arch}.ipk'
+    dest = out / f'{name}_{version}_{arch}.ipk'
     dest.write_bytes(result)
     return dest
 
@@ -49,6 +50,7 @@ def build(backend, out):
     out.mkdir(parents=True, exist_ok=True)
     files = []
     installed = []
+    sizes = []
     expected = {
         # Hashes of the Go binaries extracted from checksum-verified v3.0.0 APKs.
         # Controller is built from the modified source and checked on the target.
@@ -67,7 +69,8 @@ def build(backend, out):
                 raise ValueError(f'{name}: unexpected backend hash')
             entries.append(('usr/libexec/' + name, data, 0o755))
             installed.append((f'/usr/libexec/{name}', data))
-        files.append(package(out, package_name, 'aarch64_cortex-a53', entries, deps))
+        files.append(package(out, package_name, 'aarch64_cortex-a53', entries, deps, version=BACKEND_VERSION))
+        sizes.append((package_name, sum((len(data)+1023)//1024+4 for _, data, _ in entries)))
     entries = []
     for path in (ROOT / 'root').rglob('*'):
         if path.is_file():
@@ -80,8 +83,11 @@ def build(backend, out):
     installed.extend(('/'+name, data) for name, data, _ in entries if not name.startswith('etc/config/'))
     files.append(package(out, 'luci-app-warp', 'all', entries,
                          'luci-base, rpcd-mod-ucode, curl, jsonfilter, warp-awg, warp-warpscout', ['/etc/config/warp']))
-    (out / 'SHA256SUMS').write_text(''.join(f'{hashlib.sha256(f.read_bytes()).hexdigest()}  {f.name}\n' for f in files), encoding='ascii', newline='\n')
+    sizes.append(('luci-app-warp', sum((len(data)+1023)//1024+4 for _, data, _ in entries)))
+    (out / 'INSTALL-SIZES').write_text(''.join(f'{name} {size}\n' for name,size in sizes), encoding='ascii', newline='\n')
     (out / 'FILES.sha256').write_text(''.join(f'{hashlib.sha256(data).hexdigest()}  {name}\n' for name, data in installed), encoding='ascii', newline='\n')
+    checksummed = files + [out/'FILES.sha256', out/'INSTALL-SIZES']
+    (out / 'SHA256SUMS').write_text(''.join(f'{hashlib.sha256(f.read_bytes()).hexdigest()}  {f.name}\n' for f in checksummed), encoding='ascii', newline='\n')
     for f in files: print(f.name, f.stat().st_size)
 
 if __name__ == '__main__':

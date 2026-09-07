@@ -24,6 +24,8 @@ jobs:
           python scripts/build_ipk.py --backend .build/backend
       - name: Check packaging and syntax
         run: python tests/test_ipk.py
+      - name: Check operation ownership
+        run: sh tests/test_concurrency.sh "$PWD/root/usr/libexec/warp-common"
       - uses: actions/upload-artifact@v4
         with:
           name: opkg-aarch64-cortex-a53

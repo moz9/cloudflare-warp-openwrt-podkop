@@ -2,6 +2,7 @@
 
 set -u
 umask 077
+. "${WARP_COMMON_LIB:-/usr/libexec/warp-common}"
 
 STATE_DIR="${WARP_STATE_DIR:-/etc/warp}"
 ACCOUNT_FILE="$STATE_DIR/awg-account.json"
@@ -93,6 +94,7 @@ emit_success() {
 }
 
 acquire_lock() {
+	warp_operation_acquire || { printf '{"ok":false,"code":"operation_in_progress"}\n'; exit 1; }
 	[ -z "$($UCI_BIN changes 2>/dev/null)" ] || emit_error 'pending_uci_changes'
 	lock_parent=${LOCK_DIR%/*}
 	[ "$lock_parent" = "$LOCK_DIR" ] || mkdir -p "$lock_parent" 2>/dev/null || emit_error 'lock_failed'
@@ -817,7 +819,7 @@ do_status() {
 	rx_bytes=0
 	tx_bytes=0
 
-	if [ -d "$LOCK_DIR" ]; then
+	if warp_operation_busy; then
 		state=registering
 	elif [ -e "$ACCOUNT_FILE" ]; then
 		if account_valid; then
