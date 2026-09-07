@@ -1,0 +1,91 @@
+#!/bin/sh
+set -u
+umask 077
+DIR=/tmp/warp-job
+LOCK=/var/lock/warp-job.lock
+mkdir -p "$DIR"
+chmod 700 "$DIR"
+stamp() { awk '{print $22}' "/proc/$1/stat" 2>/dev/null; }
+alive() {
+    p=$(cat "$LOCK/pid" 2>/dev/null) || return 1
+    s=$(cat "$LOCK/stamp" 2>/dev/null) || return 1
+    case "$p" in ''|*[!0-9]*) return 1 ;; esac
+    [ -n "$s" ] && [ "$(stamp "$p")" = "$s" ] && kill -0 "$p" 2>/dev/null
+}
+write_result() { printf '%s\n' "$1" > "$DIR/result.tmp"; mv "$DIR/result.tmp" "$DIR/result.json"; }
+case "${1:-}" in
+status)
+    # OpenWrt jshn uses optional globals which are incompatible with nounset.
+    set +u
+    . /usr/share/libubox/jshn.sh
+    state=$(/usr/libexec/warp-manager status)
+    json_load "$state" || { printf '{"ok":false}\n'; exit; }
+    if alive; then json_add_boolean busy 1; else json_add_boolean busy 0; fi
+    action=$(cat "$DIR/action" 2>/dev/null || true)
+    json_add_string action "$action"
+    started_at=$(cat "$DIR/started_at" 2>/dev/null || true)
+    json_add_string started_at "$started_at"
+    code=$(jsonfilter -i "$DIR/result.json" -e '@.code' 2>/dev/null || true)
+    json_add_string job_result "$code"
+    attached=0
+    [ "$(uci -q get podkop.cfwarp.warp_managed)" != luci-app-warp ] || attached=1
+    json_add_boolean podkop_attached "$attached"
+    if [ -s "$DIR/probe.json" ]; then
+        for f in colo location checked_at; do
+            v=$(jsonfilter -i "$DIR/probe.json" -e "@.$f" 2>/dev/null || true)
+            json_add_string "$f" "$v"
+        done
+    fi
+    json_dump
+    ;;
+start)
+    action=${2:-}
+    case "$action" in register|enable|disable|reconnect|unregister|check|attach) ;; *) echo '{"ok":false,"code":"invalid_action"}'; exit 1 ;; esac
+    if ! mkdir "$LOCK" 2>/dev/null; then
+        if alive; then echo '{"ok":false,"code":"operation_in_progress"}'; exit 0; fi
+        # A just-created lock with no pid is still being handed to its worker.
+        if [ ! -s "$LOCK/pid" ]; then echo '{"ok":false,"code":"operation_in_progress"}'; exit 0; fi
+        rm -f "$LOCK/pid" "$LOCK/stamp"
+        rmdir "$LOCK" 2>/dev/null || exit 1
+        mkdir "$LOCK" || exit 1
+    fi
+    echo $$ > "$LOCK/pid"; stamp $$ > "$LOCK/stamp"
+    printf '%s\n' "$action" > "$DIR/action"
+    date +%s > "$DIR/started_at"
+    write_result '{"ok":true,"code":"started"}'
+    setsid /usr/libexec/warp-job worker "$action" </dev/null >"$DIR/worker.log" 2>&1 &
+    # Wait for the ownership handoff so a second request cannot steal the lock.
+    n=0
+    while [ "$(cat "$LOCK/pid" 2>/dev/null)" = "$$" ] && [ "$n" -lt 3 ]; do
+        sleep 1; n=$((n + 1))
+    done
+    echo '{"ok":true,"code":"started"}'
+    ;;
+worker)
+    action=${2:-}
+    echo $$ > "$LOCK/pid"; stamp $$ > "$LOCK/stamp"
+    trap 'rm -f "$LOCK/pid" "$LOCK/stamp"; rmdir "$LOCK" 2>/dev/null || true' EXIT
+    trap 'write_result '\''{"ok":false,"code":"interrupted"}'\''; exit 1' HUP INT TERM
+    case "$action" in
+    check)
+        iface=$(uci -q get warp.main.actual_interface)
+        if result=$(/usr/libexec/warp-probe "$iface"); then
+            printf '%s\n' "$result" > "$DIR/probe.json"
+            result='{"ok":true,"code":"checked"}'
+        else
+            rm -f "$DIR/probe.json"
+            result='{"ok":false,"code":"data_plane_unavailable"}'
+        fi
+        ;;
+    attach) result=$(/usr/libexec/warp-podkop attach) ;;
+    register|enable|disable|reconnect|unregister)
+        rm -f "$DIR/probe.json"
+        result=$(/usr/libexec/warp-manager "$action")
+        ;;
+    *) result='{"ok":false,"code":"invalid_action"}' ;;
+    esac
+    [ -n "$result" ] || result='{"ok":false,"code":"worker_failed"}'
+    write_result "$result"
+    ;;
+*) echo '{"ok":false,"code":"invalid_action"}'; exit 1 ;;
+esac

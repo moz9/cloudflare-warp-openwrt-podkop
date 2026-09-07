@@ -4,7 +4,7 @@
 
 import { popen } from 'fs';
 
-const manager = '/usr/libexec/warp-manager';
+const manager = '/usr/libexec/warp-job';
 
 function run(action) {
 	const allowed = {
@@ -14,12 +14,14 @@ function run(action) {
 		disable: true,
 		reconnect: true,
 		unregister: true,
+		check: true,
+		attach: true,
 	};
 
 	if (allowed[action] !== true)
 		return { ok: false, code: 'invalid_action' };
 
-	const fd = popen(manager + ' ' + action, 'r');
+	const fd = popen(manager + (action == 'status' ? ' status' : ' start ' + action), 'r');
 	if (!fd)
 		return { ok: false, code: 'manager_unavailable' };
 
@@ -37,6 +39,8 @@ function run(action) {
 }
 
 const methods = {
+	check: { call: function() { return run('check'); } },
+	attach: { call: function() { return run('attach'); } },
 	status: {
 		call: function() {
 			return run('status');

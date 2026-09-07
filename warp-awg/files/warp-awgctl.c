@@ -31,6 +31,7 @@ struct awg_config {
 	unsigned long jc;
 	unsigned long jmin;
 	unsigned long jmax;
+	unsigned long fwmark;
 	unsigned int seen;
 };
 
@@ -44,6 +45,7 @@ enum {
 	SEEN_JMIN = 1U << 6,
 	SEEN_JMAX = 1U << 7,
 	SEEN_I1 = 1U << 8,
+	SEEN_FWMARK = 1U << 9,
 };
 
 static void fail(const char *format, ...)
@@ -263,6 +265,9 @@ static struct awg_config parse_config(const char *path)
 		if (section == SECTION_INTERFACE && !strcasecmp(key, "PrivateKey")) {
 			mark_once(&config, SEEN_PRIVATE, "PrivateKey");
 			copy_value(config.private_key, sizeof(config.private_key), value, "PrivateKey");
+		} else if (section == SECTION_INTERFACE && !strcasecmp(key, "FwMark")) {
+			mark_once(&config, SEEN_FWMARK, "FwMark");
+			if (!parse_uint(value, UINT32_MAX, &config.fwmark)) fail("invalid FwMark");
 		} else if (section == SECTION_INTERFACE && !strcasecmp(key, "Jc")) {
 			mark_once(&config, SEEN_JC, "Jc");
 			if (!parse_uint(value, 65535, &config.jc)) fail("invalid Jc");
@@ -299,7 +304,7 @@ static struct awg_config parse_config(const char *path)
 	}
 	fclose(file);
 
-	if (config.seen != (SEEN_PRIVATE | SEEN_PUBLIC | SEEN_ENDPOINT | SEEN_ALLOWED |
+	if ((config.seen & ~SEEN_FWMARK) != (SEEN_PRIVATE | SEEN_PUBLIC | SEEN_ENDPOINT | SEEN_ALLOWED |
 	                    SEEN_KEEPALIVE | SEEN_JC | SEEN_JMIN | SEEN_JMAX | SEEN_I1))
 		fail("configuration is incomplete");
 	if (config.jc < 1 || config.jmin < 1 || config.jmax < config.jmin)
@@ -342,6 +347,7 @@ static char *build_payload(struct awg_config *config)
 
 	appendf(payload, PAYLOAD_SIZE, &used,
 	        "set=1\nprivate_key=%s\nreplace_peers=true\n", private_hex);
+	appendf(payload, PAYLOAD_SIZE, &used, "fwmark=%lu\n", config->fwmark);
 	appendf(payload, PAYLOAD_SIZE, &used,
 	        "jc=%lu\njmin=%lu\njmax=%lu\ni1=%s\n",
 	        config->jc, config->jmin, config->jmax, config->i1);
@@ -438,7 +444,7 @@ static void require_success(char *response)
 
 static bool allowed_field(const char *field)
 {
-	return !strcmp(field, "endpoint") ||
+	return !strcmp(field, "fwmark") || !strcmp(field, "endpoint") ||
 	       !strcmp(field, "last_handshake_time_sec") ||
 	       !strcmp(field, "rx_bytes") ||
 	       !strcmp(field, "tx_bytes") ||

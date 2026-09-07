@@ -1,0 +1,30 @@
+#!/bin/sh
+# Bounded execution without depending on optional BusyBox timeout/nohup.
+seconds=$1
+shift
+case "$seconds" in ''|*[!0-9]*) exit 2 ;; esac
+[ "$seconds" -ge 1 ] && [ "$seconds" -le 900 ] || exit 2
+setsid "$@" &
+child=$!
+stop() {
+    kill -TERM -- "-$child" 2>/dev/null || true
+    sleep 1
+    kill -KILL -- "-$child" 2>/dev/null || true
+    [ -z "${guard:-}" ] || kill "$guard" 2>/dev/null || true
+    exit 143
+}
+trap stop HUP INT TERM
+(
+    sleep "$seconds" & timer=$!
+    trap 'kill "$timer" 2>/dev/null; exit' HUP INT TERM
+    wait "$timer"
+    kill -TERM -- "-$child" 2>/dev/null || exit 0
+    sleep 3
+    kill -KILL -- "-$child" 2>/dev/null || true
+) &
+guard=$!
+wait "$child"
+rc=$?
+kill "$guard" 2>/dev/null || true
+wait "$guard" 2>/dev/null || true
+exit "$rc"

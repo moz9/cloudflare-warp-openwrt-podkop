@@ -1,10 +1,10 @@
 {
 	"admin/network/warp": {
-		"title": "WARP",
+		"title": "Cloudflare WARP",
 		"order": 90,
 		"action": {
 			"type": "view",
-			"path": "warp/overview"
+			"path": "warp/cfwarp"
 		},
 		"depends": {
 			"acl": [ "luci-app-warp" ]

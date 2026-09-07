@@ -1,0 +1,60 @@
+#!/bin/sh
+# Create an empty, dedicated section. Existing sections are never overwritten.
+set -eu
+umask 077
+fail() { printf '{"ok":false,"code":"%s"}\n' "$1"; exit 1; }
+[ "${1:-}" = attach ] || fail invalid_action
+[ -x /etc/init.d/podkop ] || fail podkop_missing
+[ -z "$(uci changes)" ] || fail pending_uci_changes
+iface=$(uci -q get warp.main.actual_interface) || fail managed_interface_missing
+printf '%s' "$iface" | grep -Eq '^[A-Za-z_][A-Za-z0-9_]{0,14}$' || fail invalid_interface_name
+[ "$(uci -q get "network.$iface.warp_managed")" = luci-app-warp ] || fail managed_interface_missing
+/usr/libexec/warp-probe "$iface" >/dev/null || fail data_plane_unavailable
+if uci -q get podkop.cfwarp >/dev/null; then
+    [ "$(uci -q get podkop.cfwarp.warp_managed)" = luci-app-warp ] &&
+    [ "$(uci -q get podkop.cfwarp.connection_type)" = vpn ] &&
+    [ "$(uci -q get podkop.cfwarp.interface)" = "$iface" ] || fail podkop_section_conflict
+    printf '{"ok":true,"code":"already_attached"}\n'
+    exit 0
+fi
+mkdir /var/lock/warp-podkop.lock 2>/dev/null || fail operation_in_progress
+work=$(mktemp -d /tmp/warp-podkop.XXXXXX)
+committed=0
+success=0
+cleanup() {
+    if [ "$committed" = 1 ] && [ "$success" = 0 ]; then
+        # CAS rollback: leave later user changes alone.
+        if [ "$(sha256sum /etc/config/podkop | cut -d ' ' -f1)" = "$after" ]; then
+            cp "$work/podkop" /etc/config/podkop
+            /usr/bin/podkop reload >/dev/null 2>&1 || true
+        fi
+    fi
+    rm -rf "$work"
+    rmdir /var/lock/warp-podkop.lock 2>/dev/null || true
+}
+trap cleanup EXIT
+trap 'exit 1' HUP INT TERM
+cp /etc/config/podkop "$work/podkop"
+mkdir "$work/uci"
+uci -q -t "$work/uci" batch <<EOF
+set podkop.cfwarp=section
+set podkop.cfwarp.connection_type='vpn'
+set podkop.cfwarp.interface='$iface'
+set podkop.cfwarp.domain_resolver_enabled='0'
+set podkop.cfwarp.user_domain_list_type='disabled'
+set podkop.cfwarp.user_subnet_list_type='disabled'
+set podkop.cfwarp.mixed_proxy_enabled='0'
+set podkop.cfwarp.resolve_real_ip_for_routing='0'
+set podkop.cfwarp.warp_managed='luci-app-warp'
+EOF
+[ -z "$(uci changes)" ] || fail pending_uci_changes
+cmp -s "$work/podkop" /etc/config/podkop || fail concurrent_config_change
+cp "$work/podkop" /etc/warp/podkop-before-attach.conf
+uci -q -t "$work/uci" commit podkop
+after=$(sha256sum /etc/config/podkop | cut -d ' ' -f1)
+committed=1
+/usr/bin/podkop reload >/dev/null 2>&1 || fail podkop_restart_failed
+/etc/init.d/sing-box status >/dev/null 2>&1 || fail podkop_restart_failed
+nft list table inet PodkopTable >/dev/null 2>&1 || fail podkop_restart_failed
+success=1
+printf '{"ok":true,"code":"attached"}\n'

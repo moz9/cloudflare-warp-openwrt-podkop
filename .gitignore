@@ -10,3 +10,7 @@ staging_dir/
 tmp/
 *.swp
 *~
+dist-podkop/
+__pycache__/
+*.pyc
+.build/

@@ -24,7 +24,8 @@ IFDOWN_BIN="${WARP_IFDOWN_BIN:-/sbin/ifdown}"
 SERVICE_INIT="${WARP_SERVICE_INIT:-/etc/init.d/warp}"
 WATCHDOG_INIT="${WARP_WATCHDOG_INIT:-/etc/init.d/warp-watchdog}"
 PING_BIN="${WARP_PING_BIN:-/bin/ping}"
-SCOUT_JOBS="${WARP_SCOUT_JOBS:-2}"
+PROBE_BIN="${WARP_PROBE_BIN:-/usr/libexec/warp-probe}"
+SCOUT_JOBS="${WARP_SCOUT_JOBS:-1}"
 SCOUT_FAST_TARGETS='162.159.192.0/24,188.114.96.0/24,188.114.97.0/24'
 SCOUT_PING_TARGET='8.8.8.8'
 
@@ -41,8 +42,16 @@ config_swapped=0
 STOP_WATCHDOG=1
 START_WATCHDOG=1
 RUNTIME_START_ERROR=interface_up_failed
+transaction_active=0
+previous_running=0
+previous_disabled=0
+network_reload_needed=1
 
 cleanup() {
+	if [ "$transaction_active" = 1 ]; then
+		transaction_active=0
+		rollback_configuration || printf '%s\n' 'rollback_failed' > "$LAST_ERROR"
+	fi
 	[ -z "$temp_batch" ] || rm -f -- "$temp_batch"
 	[ -z "$temp_export" ] || rm -f -- "$temp_export"
 	[ -z "$temp_snapshot" ] || rm -f -- "$temp_snapshot"
@@ -51,13 +60,14 @@ cleanup() {
 	[ -z "$temp_full_config" ] || rm -f -- "$temp_full_config"
 	[ -z "$temp_candidate" ] || rm -f -- "$temp_candidate"
 	[ -z "$temp_old_config" ] || rm -f -- "$temp_old_config"
-	rm -f -- "$FORCE_START_FILE" 2>/dev/null || true
 	if [ "$lock_held" -eq 1 ]; then
+		rm -f -- "$FORCE_START_FILE" 2>/dev/null || true
 		rm -f -- "$LOCK_DIR/pid" 2>/dev/null || true
 		rmdir -- "$LOCK_DIR" 2>/dev/null || true
 	fi
 }
-trap cleanup EXIT HUP INT TERM
+trap cleanup EXIT
+trap 'exit 1' HUP INT TERM
 
 json_escape() {
 	printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/[[:cntrl:]]/ /g'
@@ -83,6 +93,7 @@ emit_success() {
 }
 
 acquire_lock() {
+	[ -z "$($UCI_BIN changes 2>/dev/null)" ] || emit_error 'pending_uci_changes'
 	lock_parent=${LOCK_DIR%/*}
 	[ "$lock_parent" = "$LOCK_DIR" ] || mkdir -p "$lock_parent" 2>/dev/null || emit_error 'lock_failed'
 	if mkdir "$LOCK_DIR" 2>/dev/null; then
@@ -121,8 +132,11 @@ require_runtime_dependencies() {
 }
 
 cfg_get() {
-	value=$($UCI_BIN -q get "warp.main.$1" 2>/dev/null || true)
-	[ -n "$value" ] && printf '%s\n' "$value" || printf '%s\n' "$2"
+	if value=$($UCI_BIN -q get "warp.main.$1" 2>/dev/null); then
+		printf '%s\n' "$value"
+	else
+		printf '%s\n' "$2"
+	fi
 }
 
 valid_uci_name() {
@@ -235,11 +249,11 @@ ensure_account() {
 		return
 	fi
 	temp_account="$STATE_DIR/.awg-account.$$"
-	if ! GOMAXPROCS=1 NO_COLOR=1 "$SCOUT_BIN" register --plain --relay none \
+	if ! GOMAXPROCS=1 GOMEMLIMIT=40MiB NO_COLOR=1 /usr/libexec/warp-limit 120 "$SCOUT_BIN" register --plain --relay none \
 		--account "$temp_account" --gen-i1 quic --i1-sni "$CFG_SNI" \
 		>"$BACKEND_LOG" 2>&1; then
 		rm -f -- "$temp_account"
-		if ! GOMAXPROCS=1 NO_COLOR=1 "$SCOUT_BIN" register --plain --relay none \
+		if ! GOMAXPROCS=1 GOMEMLIMIT=40MiB NO_COLOR=1 /usr/libexec/warp-limit 120 "$SCOUT_BIN" register --plain --relay none \
 			--account "$temp_account" >>"$BACKEND_LOG" 2>&1; then
 			emit_error 'awg_registration_failed'
 		fi
@@ -319,6 +333,8 @@ build_candidate() {
 		printf '# MTU: %s\n' "$CFG_MTU"
 		printf '[Interface]\n'
 		printf 'PrivateKey = %s\n' "$private_key"
+		# Keep outer tunnel packets outside Podkop's interception rules.
+		printf 'FwMark = 2097152\n'
 		printf 'Jc = %s\n' "$jc"
 		printf 'Jmin = %s\n' "$jmin"
 		printf 'Jmax = %s\n' "$jmax"
@@ -346,7 +362,7 @@ run_endpoint_scan() {
 	[ -z "$scan_targets" ] || set -- "$@" --target "$scan_targets"
 	[ -z "$CFG_EXCLUDE_COUNTRIES" ] || set -- "$@" --exclude-country "$CFG_EXCLUDE_COUNTRIES"
 	[ -z "$CFG_EXCLUDE_NODES" ] || set -- "$@" --exclude-node "$CFG_EXCLUDE_NODES"
-	GOMAXPROCS=1 NO_COLOR=1 "$SCOUT_BIN" "$@" >>"$BACKEND_LOG" 2>&1 &&
+	GOMAXPROCS=1 GOMEMLIMIT=40MiB NO_COLOR=1 /usr/libexec/warp-limit 180 "$SCOUT_BIN" "$@" >>"$BACKEND_LOG" 2>&1 &&
 		[ -s "$temp_full_config" ]
 }
 
@@ -484,7 +500,10 @@ restore_actual_state() {
 apply_configuration() {
 	choose_interface
 	snapshot_managed_section || emit_error 'network_snapshot_failed'
-	[ -z "$CFG_ACTUAL" ] || $IFDOWN_BIN "$CFG_ACTUAL" >/dev/null 2>&1 || true
+	transaction_active=1
+	if [ -n "$CFG_ACTUAL" ] && interface_owned "$CFG_ACTUAL"; then
+		$IFDOWN_BIN "$CFG_ACTUAL" >/dev/null 2>&1 || true
+	fi
 
 	temp_txn="$STATE_DIR/.uci.$$"
 	temp_batch="$STATE_DIR/.network-batch.$$"
@@ -609,7 +628,7 @@ runtime_start() {
 		RUNTIME_START_ERROR=tunnel_start_timeout
 		return 1
 	fi
-	if ! $UBUS_BIN call network reload '{}' >/dev/null 2>&1; then
+	if [ "$network_reload_needed" = 1 ] && ! $UBUS_BIN call network reload '{}' >/dev/null 2>&1; then
 		RUNTIME_START_ERROR=network_reload_failed
 		return 1
 	fi
@@ -618,13 +637,8 @@ runtime_start() {
 		return 1
 	fi
 	wait_count=0
-	while [ "$wait_count" -lt 15 ]; do
-		# The selected endpoint has already passed WARPSCOUT's in-tunnel data
-		# check. Some TUN implementations return a non-zero ping exit status
-		# after receiving a reply, so a fresh authenticated handshake is also a
-		# valid readiness signal.
-		if "$PING_BIN" -4 -I "$ACTUAL_INTERFACE" -c 1 -W 2 1.1.1.1 >/dev/null 2>&1 ||
-			recent_handshake "$ACTUAL_INTERFACE" 60; then
+	while [ "$wait_count" -lt 3 ]; do
+		if "$PROBE_BIN" "$ACTUAL_INTERFACE" >/dev/null 2>&1; then
 			[ "$START_WATCHDOG" -eq 0 ] || "$WATCHDOG_INIT" restart >/dev/null 2>&1 || true
 			return 0
 		fi
@@ -636,6 +650,7 @@ runtime_start() {
 }
 
 rollback_configuration() {
+	transaction_active=0
 	"$SERVICE_INIT" stop >/dev/null 2>&1 || true
 	rollback_live_config || return 1
 	restore_snapshot || return 1
@@ -644,8 +659,10 @@ rollback_configuration() {
 	if [ -n "$CFG_ACTUAL" ] && interface_owned "$CFG_ACTUAL"; then
 		$IFUP_BIN "$CFG_ACTUAL" >/dev/null 2>&1 || true
 	fi
-	if [ "$CFG_BACKEND" = amneziawg ] && awg_config_valid; then
+	if [ "$previous_disabled" = 1 ]; then : > "$DISABLED_FILE"; else rm -f "$DISABLED_FILE"; fi
+	if [ "$previous_running" = 1 ] && [ "$CFG_BACKEND" = amneziawg ] && awg_config_valid; then
 		runtime_restart_service || return 1
+		"$WATCHDOG_INIT" start >/dev/null 2>&1 || true
 	fi
 }
 
@@ -698,6 +715,8 @@ connect_tunnel() {
 	fi
 	ensure_account
 	prepare_tunnel_config "$rescan"
+	"$SERVICE_INIT" status >/dev/null 2>&1 && previous_running=1 || true
+	[ ! -e "$DISABLED_FILE" ] || previous_disabled=1
 	runtime_stop
 	apply_configuration
 	if ! install_candidate_config; then
@@ -709,6 +728,9 @@ connect_tunnel() {
 		emit_error "$RUNTIME_START_ERROR"
 	fi
 	discard_config_backup
+	transaction_active=0
+	"$SERVICE_INIT" enable >/dev/null 2>&1 || true
+	"$WATCHDOG_INIT" enable >/dev/null 2>&1 || true
 	emit_success "$success_code" "$ACTUAL_INTERFACE"
 }
 
@@ -729,6 +751,7 @@ do_reconnect() {
 
 do_recover() {
 	acquire_lock
+	network_reload_needed=0
 	STOP_WATCHDOG=0
 	START_WATCHDOG=0
 	require_runtime_dependencies
@@ -761,6 +784,9 @@ do_unregister() {
 	acquire_lock
 	require_dependencies
 	validate_settings
+	if [ -n "$CFG_ACTUAL" ] && $UCI_BIN -q show podkop 2>/dev/null | grep -q "\\.interface='$CFG_ACTUAL'$"; then
+		emit_error 'podkop_section_attached'
+	fi
 	if [ -e "$ACCOUNT_FILE" ]; then
 		account_valid || emit_error 'invalid_awg_account'
 		api_error=$($API_BIN unregister "$ACCOUNT_FILE" "$CFG_ACTUAL" 2>&1 >/dev/null)

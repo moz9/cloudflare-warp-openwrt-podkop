@@ -1,0 +1,11 @@
+#!/bin/sh
+set -eu
+umask 077
+iface=${1:-}
+printf '%s' "$iface" | grep -Eq '^[A-Za-z_][A-Za-z0-9_]{0,14}$' || exit 2
+[ -e "/sys/class/net/$iface/tun_flags" ] || exit 1
+trace=$(curl -4fsS --interface "$iface" --connect-timeout 5 --max-time 12 https://1.1.1.1/cdn-cgi/trace) || exit 1
+printf '%s\n' "$trace" | grep -Eq '^warp=(on|plus)$' || exit 1
+colo=$(printf '%s\n' "$trace" | sed -n 's/^colo=\([A-Z][A-Z][A-Z]\)$/\1/p')
+loc=$(printf '%s\n' "$trace" | sed -n 's/^loc=\([A-Z][A-Z]\)$/\1/p')
+printf '{"ok":true,"warp":true,"colo":"%s","location":"%s","checked_at":%s}\n' "$colo" "$loc" "$(date +%s)"
