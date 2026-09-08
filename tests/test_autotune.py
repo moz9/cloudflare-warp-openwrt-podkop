@@ -17,6 +17,16 @@ def rank(rows):
 
 
 class AutotuneRankingTests(unittest.TestCase):
+    def test_balanced_throughput_beats_download_only_peak(self):
+        self.assertEqual(rank([
+            '1|ep|6|12|12|0|0|500|10000000|3|0|3|10000000|2|2',
+            '2|ep|12|12|12|0|0|100|20000000|3|0|3|1000000|2|2'])[0], '1')
+
+    def test_single_sample_cannot_beat_complete_measurements(self):
+        self.assertEqual(rank([
+            '1|ep|6|12|12|0|0|500|1000000|3|0|3|1000000|2|2',
+            '2|ep|12|12|12|0|0|100|90000000|3|0|3|90000000|1|1'])[0], '1')
+
     def test_fast_broken_tunnel_cannot_beat_stable(self):
         self.assertEqual(rank([
             '1|ep|6|12|12|0|0|500|1000000|3|0|3',

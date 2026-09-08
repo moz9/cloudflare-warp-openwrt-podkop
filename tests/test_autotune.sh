@@ -18,7 +18,7 @@ put state running; put reason ''; put selection google,youtube
 put minutes 15; put elapsed 10; put started_at 1; put current 1
 candidate=1; candidate_ep=162.159.192.55:2408; candidate_jc=6
 checks=3; failures=0; rounds=3
-: > "$WORK/uploads"; : > "$WORK/samples"; printf '1000000\n' > "$WORK/speeds"
+: > "$WORK/samples"; printf '1000000\n3000000\n' > "$WORK/speeds"; printf '2000000\n6000000\n' > "$WORK/uploads"
 for n in 1 2 3 4 5 6 7 8 9 10 11 12; do echo 'google|ok|500|0|204|0' >> "$WORK/samples"; done
 : > "$WORK/results"
 record_candidate
@@ -26,5 +26,14 @@ record_candidate
 snapshot_auto
 [ "$checks:$failures:$rounds" = '3:0:3' ]
 [ "$(jsonfilter -i "$WORK/status.json" -e '@.candidates[0].rounds')" = 3 ]
-[ "$(jsonfilter -i "$WORK/status.json" -e '@.candidates[0].speed')" = 1000000 ]
+[ "$(jsonfilter -i "$WORK/status.json" -e '@.candidates[0].speed')" = 2000000 ]
+[ "$(jsonfilter -i "$WORK/status.json" -e '@.candidates[0].upload_speed')" = 4000000 ]
 echo PASS_autotune_ranking_rounds_snapshot_isolation
+
+put state complete; snapshot_auto
+[ "$(jsonfilter -i "$WORK/status.json" -e '@.candidates[0].recommended')" = true ]
+touch "$WORK/unrelated" "$WORK/baseline.conf" "$WORK/note-6" "$WORK/samples-6" "$WORK/speeds-6" "$WORK/uploads-6"
+clear_previous_samples
+[ -e "$WORK/unrelated" ] && [ -e "$WORK/baseline.conf" ]
+[ ! -e "$WORK/note-6" ] && [ ! -e "$WORK/samples-6" ] && [ ! -e "$WORK/speeds-6" ] && [ ! -e "$WORK/uploads-6" ]
+echo PASS_means_recommendation_and_owned_cleanup
