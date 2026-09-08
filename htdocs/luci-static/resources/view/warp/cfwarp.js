@@ -85,7 +85,7 @@ return view.extend({
             E('div',{style:'display:flex;flex-wrap:wrap;gap:12px'},[this.autoDuration,this.autoStart,this.autoStop]),
             this.autoProgress,
             E('div',{style:'overflow-x:auto'},E('table',{class:'table warp-test-table'},[
-                E('thead',{},E('tr',{},['Вариант','Доступность','Обрывы WARP',s.speed_metric==='mean_v1'?'Средняя загрузка':'Загрузка (старый замер)',s.speed_metric==='mean_v1'?'Средняя отдача':'Отдача (старый замер)','Задержка 95%','Действие'].map(t=>E('th',{},t)))),this.autoRows
+                E('thead',{},this.autoHead=E('tr',{},['Вариант','Доступность','Обрывы WARP','Загрузка','Отдача','Задержка 95%','Действие'].map(t=>E('th',{},t)))),this.autoRows
             ])),
             E('p',{},'Рейтинг учитывает успешные ответы выбранных сервисов, ошибки, затем полноту замеров, сочетание средней загрузки и отдачи, затем задержку. Для применения нужны минимум три круга и подтверждения WARP без обрывов. 403 не считается успехом. Загрузка и отдача — средние арифметические успешных замеров через тестовый WARP: до 64 МиБ скачивания и 16 МиБ отправки за замер, до 8 секунд на направление. До 960 МиБ за подбор; нагрузка может временно замедлить интернет. Это один поток: результат не равен многопоточному Speedtest, скорости тарифа или YouTube. При одном замере оценка предварительная; для рекомендации нужны два замера каждого направления. Тестовые файлы не сохраняются, старые результаты заменяются при новом запуске.'),
             E('p',{},'Исходный вариант отмечен в таблице; остальные сравниваются с ним. MTU и маскирующее имя в этом подборе не перебираются. Применение выбранного варианта может кратко прервать WARP; при неудачной проверке прежний вариант возвращается.')
@@ -106,6 +106,7 @@ return view.extend({
             this.autoStart.disabled=running||!!this.autoPending;this.autoStop.disabled=!running||!!this.autoPending;this.autoDuration.disabled=running;
             this.autoChoices.forEach(c=>{c.disabled=running;if(running)c.checked=(','+s.selection+',').includes(','+c.value+',');});
             const cols=['Вариант','Доступность','Обрывы WARP',s.speed_metric==='mean_v1'?'Средняя загрузка':'Загрузка (старый замер)',s.speed_metric==='mean_v1'?'Средняя отдача':'Отдача (старый замер)','Задержка 95%','Действие'];
+            this.autoHead.replaceChildren(...cols.map(t=>E('th',{},t)));
             this.autoRows.replaceChildren(...(s.candidates||[]).map((c,index)=>{
                 const eligible=s.state==='complete'&&c.checks>=3&&c.failures===0&&c.rounds>=3&&c.good>0;
                 const apply=E('button',{class:'btn',click:()=>this.autoAction(()=>autoApplyRPC(c.id))},'Применить');
