@@ -72,7 +72,7 @@ const autoMethods = {
     } },
     autotune_start: { args: { minutes:15, services:'' }, call: function(request) {
         const m=request.args.minutes, s=request.args.services;
-        if (m != 15 && m != 30 && m != 45 && m != 60) return {ok:false,code:'invalid_duration'};
+        if (m != 5 && m != 15 && m != 30 && m != 45 && m != 60) return {ok:false,code:'invalid_duration'};
         if (type(s) != 'string' || length(s)>128 || !match(s,/^[a-z_,]+$/)) return {ok:false,code:'invalid_selection'};
         return autoRun('start ' + m + ' ' + s);
     } }

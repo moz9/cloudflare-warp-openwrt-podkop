@@ -11,7 +11,7 @@ AWK = shutil.which('awk') or r'C:\Program Files\Git\usr\bin\awk.exe'
 
 
 def rank(rows, limited=False):
-    result = subprocess.run([AWK, '-F|', '-v', 'limited='+str(int(limited)), PROGRAM], input='\n'.join(rows)+'\n',
+    result = subprocess.run([AWK, '-F|', '-v', 'threshold=2', '-v', 'limited='+str(int(limited)), PROGRAM], input='\n'.join(rows)+'\n',
                             text=True, capture_output=True, check=True)
     return [line.split('|')[1] for line in sorted(result.stdout.splitlines(), reverse=True)]
 

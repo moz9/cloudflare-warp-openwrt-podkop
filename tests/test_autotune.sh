@@ -30,7 +30,7 @@ snapshot_auto
 [ "$(jsonfilter -i "$WORK/status.json" -e '@.candidates[0].upload_speed')" = 4000000 ]
 echo PASS_autotune_ranking_rounds_snapshot_isolation
 
-put state complete; snapshot_auto
+put state complete; put assessment advantage; snapshot_auto
 [ "$(jsonfilter -i "$WORK/status.json" -e '@.candidates[0].recommended')" = true ]
 touch "$WORK/unrelated" "$WORK/baseline.conf" "$WORK/note-6" "$WORK/samples-6" "$WORK/speeds-6" "$WORK/uploads-6"
 clear_previous_samples

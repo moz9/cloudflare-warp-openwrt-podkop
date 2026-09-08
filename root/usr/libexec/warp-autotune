@@ -29,9 +29,10 @@ snapshot_auto() (
     set +u
     . /usr/share/libubox/jshn.sh
     json_init; json_add_boolean ok 1
-    for key in state reason selection speed_metric; do json_add_string "$key" "$(get "$key")"; done
+    for key in state reason selection speed_metric phase assessment; do json_add_string "$key" "$(get "$key")"; done
     for key in minutes elapsed started_at current; do json_add_int "$key" "$(get "$key")"; done
     json_add_boolean speed_limited "$([ -e "$WORK/speed-limited" ] && echo 1 || echo 0)"
+    json_add_int speed_target "$([ "$(get minutes)" = 5 ] && echo 3 || echo 2)"
     json_add_array candidates
     if [ -s "$WORK/ranked" ]; then
         while IFS='|' read -r cid ep jc total good restricted errors p95 speed checks failures rounds upload down_count up_count; do
@@ -50,8 +51,18 @@ snapshot_auto() (
             json_add_int speed_samples "${down_count:-0}"
             json_add_int upload_samples "${up_count:-0}"
             json_add_int upload_speed "${upload:-0}"
+            for direction in speeds uploads; do
+                if [ -f "$WORK/$direction-$cid" ]; then
+                    distribution=$(speed_stats "$WORK/$direction-$cid")
+                    prefix=download; [ "$direction" != uploads ] || prefix=upload
+                    old_ifs=$IFS; IFS='|'; set -- $distribution; IFS=$old_ifs
+                    json_add_int "${prefix}_median" "$2"
+                    json_add_int "${prefix}_min" "$3"
+                    json_add_int "${prefix}_max" "$4"
+                fi
+            done
             recommended=0
-            if [ ! -e "$WORK/speed-limited" ] && [ "$(get state)" = complete ] && [ "$cid" = "$(head -n 1 "$WORK/ranked" | cut -d'|' -f1)" ] &&
+            if [ "$(get assessment)" = advantage ] && [ ! -e "$WORK/speed-limited" ] && [ "$(get state)" = complete ] && [ "$cid" = "$(head -n 1 "$WORK/ranked" | cut -d'|' -f1)" ] &&
                 [ "$checks" -ge 3 ] && [ "$failures" = 0 ] && [ "$rounds" -ge 3 ] && [ "$good" -gt 0 ] &&
                 [ "${down_count:-0}" -ge 2 ] && [ "${up_count:-0}" -ge 2 ]; then recommended=1; fi
             json_add_boolean recommended "$recommended"
@@ -74,14 +85,15 @@ snapshot_auto() (
 )
 rank_results() {
     # Availability precedes throughput. Never reward a fast failed/blocked request.
-    awk -F'|' -v limited="$([ -e "$WORK/speed-limited" ] && echo 1 || echo 0)" '{
+    awk -F'|' -v threshold="$([ "$(get phase)" = screening ] && echo 1 || { [ "$(get minutes)" = 5 ] && echo 3 || echo 2; })" -v limited="$([ -e "$WORK/speed-limited" ] && echo 1 || echo 0)" '{
         eligible=($11==0 && $10>=3 && $12>=3 && $5>0);
         coverage=($4 ? $5/$4 : 0); reliability=($4 ? 1-$7/$4 : 0);
-        measured=(!limited && $14>=2 && $15>=2);
+        measured=(!limited && $14>=threshold && $15>=threshold);
         speed=(measured ? sqrt($9*$13) : 0);
         speed=(speed<999999999 ? speed : 999999999); latency=999999999-$8;
         printf "%d%07d%07d%d%09d%09d|%s\n",eligible,coverage*1000000,reliability*1000000,measured,speed,latency,$0
     }' "$WORK/results" | LC_ALL=C sort -r | cut -d'|' -f2- > "$WORK/ranked"
+    assess_results
 }
 # Two bounded single-stream samples; payload is discarded, never buffered in RAM.
 speed_sample() {
@@ -113,7 +125,7 @@ speed_mean() { awk '{sum+=$1} END {printf "%.0f\n", NR ? sum/NR : 0}' "$1"; }
 clear_previous_samples() {
     # Only owned per-run files; called after acquiring both locks and preflight.
     for old_id in 1 2 3 4 5 6; do
-        rm -f "$WORK/samples-$old_id" "$WORK/speeds-$old_id" "$WORK/uploads-$old_id" "$WORK/note-$old_id"
+        rm -f "$WORK/samples-$old_id" "$WORK/speeds-$old_id" "$WORK/uploads-$old_id" "$WORK/note-$old_id" "$WORK/accepted-$old_id" "$WORK/checks-$old_id" "$WORK/failures-$old_id"
     done
     for old_file in speed-limited samples speeds uploads candidate.score service-score.tmp register.log precheck.log proxy.log; do
         rm -f "$WORK/$old_file"
@@ -129,10 +141,195 @@ record_candidate() {
     cp "$WORK/speeds" "$WORK/speeds-$candidate"
     cp "$WORK/uploads" "$WORK/uploads-$candidate"
     measured_rounds=$(awk -v n="$(get probes_per_round)" 'END {print (n>0 ? int(NR/n) : 0)}' "$WORK/samples")
+    awk -F'|' -v id="$candidate" '$1!=id' "$WORK/results" > "$WORK/results.next"
+    mv "$WORK/results.next" "$WORK/results"
     printf '%s|%s|%s|%s|%s|%s|%s|%s\n' "$candidate" "$candidate_ep" "$candidate_jc" "$stats" "$rate" "$checks" "$failures" "$measured_rounds|$upload|$down_count|$up_count" >> "$WORK/results"
     cp "$WORK/samples" "$WORK/samples-$candidate"
     rank_results
 }
+
+speed_stats() {
+    sort -n "$1" | awk '{v[NR]=$1;sum+=$1} END {
+        n=NR; median=(n ? (n%2 ? v[(n+1)/2] : (v[n/2]+v[n/2+1])/2) : 0);
+        printf "%.0f|%.0f|%.0f|%.0f|%d\n",n?sum/n:0,median,n?v[1]:0,n?v[n]:0,n
+    }'
+}
+
+assess_results() {
+    put assessment insufficient
+    [ ! -e "$WORK/speed-limited" ] || { put assessment limited; return; }
+    [ "$(get phase)" != screening ] || return 0
+    # No statistical certainty is claimed from three observations. Require an
+    # observed margin larger than both 15% and the observed speed ranges.
+    target=2; [ "$(get minutes)" != 5 ] || target=3
+    eligible=$(awk -F'|' -v target="$target" '$10>=3 && $11==0 && $12>=3 && $5>0 && $14>=target && $15>=target {print $1}' "$WORK/ranked" | head -n 2)
+    set -- $eligible
+    [ "$#" -ge 2 ] || return 0
+    first=$1; second=$2
+    lo=; hi=
+    for ident in "$first" "$second"; do
+        for direction in speeds uploads; do
+            [ -s "$WORK/$direction-$ident" ] || return 0
+        done
+        ds=$(speed_stats "$WORK/speeds-$ident"); us=$(speed_stats "$WORK/uploads-$ident")
+        range=$(printf '%s|%s\n' "$ds" "$us" | awk -F'|' '{printf "%.0f|%.0f|%.0f",sqrt($2*$7),sqrt($3*$8),sqrt($4*$9)}')
+        if [ "$ident" = "$first" ]; then lo=$range; else hi=$range; fi
+    done
+    decision=$(printf '%s|%s\n' "$lo" "$hi" | awk -F'|' '{print ($1>$4*1.15 && $2>$6 ? "advantage" : "close")}')
+    put assessment "$decision"
+}
+
+quick_schedule() {
+    cat "$WORK/finalists"
+    awk '{v[NR]=$0} END {for(i=NR;i>0;i--)print v[i]}' "$WORK/finalists"
+    cat "$WORK/finalists"
+}
+quick_services() {
+    # At most three small curl processes. SOCKS resolves DNS through the test peer.
+    # Each child owns its variables; writes are collected in deterministic order.
+    job=0; pending=
+    while IFS='|' read -r sid label host url; do
+        case ",$(get selection)," in *",$sid,"*) ;; *) continue;; esac
+        stopping && break
+        job=$((job+1))
+        (
+            remaining || exit 0
+            [ "$left" -le 3 ] || left=3
+            rc=0
+            response=$(probe_curl -4sS --head --connect-timeout 2 --max-time "$left" --output /dev/null \
+                --write-out '%{http_code}|%{time_total}' "$url" 2>/dev/null) || rc=$?
+            code=${response%%|*}; secs=${response#*|}; kind=network
+            if [ "$rc" = 0 ]; then
+                case "$code" in 2??|3??) kind=ok;; 401|403|429) kind=restricted;; *) kind=http;; esac
+            fi
+            ms=$(awk -v s="$secs" 'BEGIN{printf "%.0f",s*1000}')
+            printf '%s|%s|%s|%s|%s|0\n' "$sid" "$kind" "$ms" "$rc" "$code" > "$WORK/quick-probe-$job"
+        ) 7>&- 9>&- &
+        pending="$pending $!"
+        if [ "$((job%3))" = 0 ]; then for pid in $pending; do wait "$pid" || true; done; pending=; fi
+    done < "$DATA/services.tsv"
+    for pid in $pending; do wait "$pid" || true; done
+    n=1
+    while [ "$n" -le "$job" ]; do
+        cat "$WORK/quick-probe-$n" >> "$WORK/samples"
+        rm -f "$WORK/quick-probe-$n"
+        n=$((n+1))
+    done
+}
+quick_speed() {
+    [ ! -e "$WORK/speed-limited" ] || return 0
+    remaining && [ "$left" -ge 3 ] || return 0
+    rc=0
+    result=$(probe_curl -4fsS --connect-timeout 2 --max-time 3 --max-filesize 33554432 --output /dev/null \
+        --write-out '%{http_code}|%{size_download}|%{speed_download}|%{time_total}' \
+        'https://speed.cloudflare.com/__down?bytes=33554432' 2>/dev/null) || rc=$?
+    case "$result" in 429\|*) touch "$WORK/speed-limited"; return 0;; esac
+    printf '%s\n' "$result" | awk -F'|' -v rc="$rc" 'NF==4 && $1==200 && $2>=1048576 && $2<=33554432 && $3>0 && ((rc==0 && $2==33554432) || (rc==28 && $4>=2.8)) {printf "%.0f\n",$3}' >> "$WORK/speeds"
+    remaining && [ "$left" -ge 3 ] || return 0
+    rc=0
+    result=$(head -c 8388608 /dev/zero | probe_curl -4fsS --connect-timeout 2 --max-time 3 --request POST --upload-file - \
+        -H 'Transfer-Encoding:' -H 'Content-Length: 8388608' -H 'Expect:' --output /dev/null \
+        --write-out '%{http_code}|%{size_upload}|%{speed_upload}|%{time_total}' 'https://speed.cloudflare.com/__up' 2>/dev/null) || rc=$?
+    case "$result" in 429\|*) touch "$WORK/speed-limited"; return 0;; esac
+    printf '%s\n' "$result" | awk -F'|' -v rc="$rc" 'NF==4 && rc==0 && $1==200 && $2==8388608 && $3>0 {printf "%.0f\n",$3}' >> "$WORK/uploads"
+}
+quick_visit() {
+    [ "$(conf_hash)" = "$(get baseline_hash)" ] || { put state changed; put reason configuration_changed; return 1; }
+    [ -z "$(port_inode)" ] || { put state error; put reason test_port_busy; return 1; }
+    [ "$(awk '/MemAvailable/ {print $2}' /proc/meminfo)" -ge 65536 ] || { put state error; put reason low_memory; return 1; }
+    put current "$candidate"
+    checks=$(get "checks-$candidate"); checks=${checks:-0}
+    failures=$(get "failures-$candidate"); failures=${failures:-0}
+    for file in samples speeds uploads; do
+        if [ -f "$WORK/$file-$candidate" ]; then cp "$WORK/$file-$candidate" "$WORK/$file"; else : > "$WORK/$file"; fi
+    done
+    put "note-$candidate" ''
+    # Country/node filters are checked once and never bypassed in quick mode.
+    if [ ! -e "$WORK/accepted-$candidate" ]; then
+        set -- scan --plain --account "$ACCOUNT" --proto awg --i1 "$(value I1)" \
+            --jc "$candidate_jc" --jmin "$(value Jmin)" --jmax "$(value Jmax)" \
+            --target "${candidate_ep%:*}" --port "${candidate_ep##*:}" --sample 1 \
+            --tunnel-jobs 1 --tun-ping-count 5 --no-report --best --interface "$(get wan)"
+        countries=$(uci -q get warp.main.exclude_countries || true)
+        nodes=$(uci -q get warp.main.exclude_nodes || true)
+        [ -z "$countries" ] || set -- "$@" --exclude-country "$countries"
+        [ -z "$nodes" ] || set -- "$@" --exclude-node "$nodes"
+        remaining || return 0
+        [ "$left" -le 8 ] || left=8
+        accepted=$(GOMAXPROCS=1 GOMEMLIMIT=24MiB /usr/libexec/warp-limit "$left" /usr/libexec/warp-warpscout "$@" 2> "$WORK/precheck.log") || accepted=
+        if [ "$accepted" != "$candidate_ep" ]; then
+            put "note-$candidate" precheck_failed; record_candidate; return 0
+        fi
+        touch "$WORK/accepted-$candidate"
+    fi
+    GOMAXPROCS=1 GOMEMLIMIT=24MiB /usr/libexec/warp-warpscout socks --account "$ACCOUNT" --endpoint "$candidate_ep" --proto awg \
+        --i1 "$(value I1)" --jc "$candidate_jc" --jmin "$(value Jmin)" --jmax "$(value Jmax)" \
+        --listen 127.0.0.1 --port "$PORT" --interface "$(get wan)" > "$WORK/proxy.log" 2>&1 &
+    child=$!
+    owner=$$; owner_stamp=$(stamp $$); child_stamp=$(stamp "$child")
+    (
+        while [ "$(monotime)" -lt "$deadline" ] && [ "$(stamp "$owner")" = "$owner_stamp" ]; do sleep 1; done
+        [ "$(stamp "$child")" != "$child_stamp" ] || kill "$child" 2>/dev/null || true
+    ) 7>&- 9>&- &
+    guardian=$!
+    wait_n=0
+    while [ "$wait_n" -lt 4 ] && ! stopping && kill -0 "$child" 2>/dev/null; do
+        proxy_owned && break
+        sleep 1; wait_n=$((wait_n+1))
+    done
+    if proxy_owned && ! stopping; then
+        checks=$((checks+1)); remaining || return 0
+        [ "$left" -le 3 ] || left=3
+        if probe_curl -4fsS --connect-timeout 2 --max-time "$left" --max-filesize 16384 https://1.1.1.1/cdn-cgi/trace 2>/dev/null | grep -Eq '^warp=(on|plus)$'; then
+            quick_services
+            quick_speed
+        else
+            failures=$((failures+1))
+        fi
+    else
+        failures=$((failures+1)); put "note-$candidate" proxy_start_failed
+    fi
+    proxy_stop
+    put "checks-$candidate" "$checks"; put "failures-$candidate" "$failures"
+    record_candidate
+}
+quick_worker() {
+    WARP_TEST_SOCKS=socks5h://127.0.0.1:$PORT
+    put phase screening
+    # Reserve most of the global budget for independent finalist repetitions.
+    screen_slot=$(((end-$(monotime))/15)); [ "$screen_slot" -le 20 ] || screen_slot=20
+    while IFS='|' read -r candidate candidate_ep candidate_jc; do
+        [ ! -e "$WORK/stop" ] || break
+        deadline=$(($(monotime)+screen_slot)); [ "$deadline" -le "$end" ] || deadline=$end
+        quick_visit || return 0
+        put elapsed "$(($(monotime)-started))"; snapshot_auto
+    done < "$WORK/candidates"
+    # Keep a healthy baseline, then the strongest challenger from screening.
+    awk -F'|' '$10>0 && $11==0 && $5>0 {print}' "$WORK/ranked" > "$WORK/healthy"
+    : > "$WORK/finalists"
+    awk -F'|' '$1==1 {print $1 "|" $2 "|" $3}' "$WORK/healthy" >> "$WORK/finalists"
+    awk -F'|' '$1!=1 {print $1 "|" $2 "|" $3}' "$WORK/healthy" | head -n "$([ -s "$WORK/finalists" ] && echo 1 || echo 2)" >> "$WORK/finalists"
+    # Screening samples select finalists only; final scores use equal fresh rounds.
+    while IFS='|' read -r candidate candidate_ep candidate_jc; do
+        for file in samples speeds uploads; do : > "$WORK/$file-$candidate"; done
+        put "checks-$candidate" 0; put "failures-$candidate" 0
+    done < "$WORK/finalists"
+    quick_schedule > "$WORK/schedule"
+    visits=$(wc -l < "$WORK/schedule")
+    put phase finalists
+    while IFS='|' read -r candidate candidate_ep candidate_jc; do
+        [ ! -e "$WORK/stop" ] || break
+        [ "$(monotime)" -lt "$end" ] || break
+        slot=$(((end-$(monotime))/visits)); visits=$((visits-1))
+        deadline=$(($(monotime)+slot))
+        quick_visit || return 0
+        put elapsed "$(($(monotime)-started))"; snapshot_auto
+        # Spread repeated observations over the selected duration.
+        while ! stopping; do sleep 1; done
+    done < "$WORK/schedule"
+    if [ -e "$WORK/stop" ]; then put state stopped; else put state complete; fi
+}
+
 auto_worker() {
     [ "$(readlink /proc/self/fd/7 2>/dev/null)" = "$LOCK" ] && flock -n 7 || exit 1
     put pid $$; put stamp "$(stamp $$)"
@@ -155,6 +352,7 @@ auto_worker() {
     [ -s "$ACCOUNT" ] || { put state error; put reason registration_failed; exit 1; }
     [ "$(jsonfilter -i "$ACCOUNT" -e '@.private_key')" != "$(value PrivateKey)" ] || { put state error; put reason account_not_isolated; exit 1; }
     put reason ''; snapshot_auto
+    if [ "$(get minutes)" = 5 ]; then quick_worker; return; fi
     slot_seconds=$(((end-$(monotime))/6))
     WARP_TEST_SOCKS=socks5h://127.0.0.1:$PORT
     while IFS='|' read -r candidate candidate_ep candidate_jc; do
@@ -220,7 +418,7 @@ auto_worker() {
 case "${1:-}" in
 start)
     minutes=${2:-}; selection=${3:-}
-    case "$minutes" in 15|30|45|60) ;; *) answer false invalid_duration; exit 1;; esac
+    case "$minutes" in 5|15|30|45|60) ;; *) answer false invalid_duration; exit 1;; esac
     valid_selection "$selection" || { answer false invalid_selection; exit 1; }
     exec 6>>"$LOCK.control"; flock -n 6 || { answer false test_busy; exit; }
     exec 7>>"$LOCK"; flock -n 7 || { answer false test_busy; exit; }
@@ -233,7 +431,8 @@ start)
     printf '%s' "$wan" | grep -Eq '^[A-Za-z_][A-Za-z0-9_.-]{0,14}$' && [ "$wan" != "$iface" ] || { answer false invalid_wan; exit; }
     [ -z "$(port_inode)" ] || { answer false test_port_busy; exit; }
     clear_previous_samples
-    put speed_metric mean_v1
+    put phase sequential; put assessment insufficient
+    put speed_metric mean_v2
     cp /etc/warp/awg.conf "$WORK/baseline.conf"
     put baseline_hash "$(conf_hash)"; put wan "$wan"; put interface "$iface"
     put probes_per_round "$(awk -F'|' -v s=",$selection," 'index(s,"," $1 ",") {n++} END{print n+0}' "$DATA/services.tsv")"

@@ -45,7 +45,7 @@ const errors = {
     operation_in_progress: 'Операция уже выполняется.',
     podkop_busy: 'Podkop обновляет подписки или DNS. Повторите после завершения операции.',
     test_busy: 'Проверка уже выполняется.',
-    invalid_duration: 'Выберите 15, 30, 45 или 60 минут.',
+    invalid_duration: 'Выберите доступную продолжительность проверки.',
     invalid_selection: 'Выберите хотя бы один сервис.',
     data_plane_unavailable: 'Проверка HTTPS через WARP не прошла.',
     scan_route_failed: 'Не удалось подготовить прямую проверку узлов WARP.',
@@ -73,7 +73,7 @@ return view.extend({
     renderAutotune: function() {
         this.autoExpanded=new Set();
         this.autoChoices=testProfiles.map(p=>E('input',{type:'checkbox',value:p[0],checked:p[2]||null}));
-        this.autoDuration=E('select',{'aria-label':'Время всего подбора'},[15,30,45,60].map(m=>E('option',{value:m},m+' минут')));
+        this.autoDuration=E('select',{'aria-label':'Время всего подбора'},[5,15,30,45,60].map(m=>E('option',{value:m},m+' минут')));
         this.autoProgress=E('p',{'aria-live':'polite'},'Подбор ещё не запускался.');
         this.autoRows=E('tbody');
         this.autoStart=E('button',{class:'btn cbi-button-action',click:()=>this.autoAction(()=>autoStartRPC(Number(this.autoDuration.value),this.autoChoices.filter(c=>c.checked).map(c=>c.value).join(',')))},'Начать автоподбор');
@@ -87,7 +87,8 @@ return view.extend({
             E('div',{style:'overflow-x:auto'},E('table',{class:'table warp-test-table'},[
                 E('thead',{},this.autoHead=E('tr',{},['Вариант','Доступность','Обрывы WARP','Загрузка','Отдача','Задержка 95%','Действие'].map(t=>E('th',{},t)))),this.autoRows
             ])),
-            E('p',{},'Рейтинг учитывает успешные ответы выбранных сервисов, ошибки, затем полноту замеров, сочетание средней загрузки и отдачи, затем задержку. Для применения нужны минимум три круга и подтверждения WARP без обрывов. 403 не считается успехом. Загрузка и отдача — средние арифметические успешных замеров через тестовый WARP: до 64 МиБ скачивания и 16 МиБ отправки за замер, до 8 секунд на направление. До 960 МиБ за подбор; нагрузка может временно замедлить интернет. Это один поток: результат не равен многопоточному Speedtest, скорости тарифа или YouTube. При одном замере оценка предварительная; для рекомендации нужны два замера каждого направления. Тестовые файлы не сохраняются, старые результаты заменяются при новом запуске.'),
+            E('p',{},'5 минут: отбор шести вариантов и три чередующихся прохода двух финалистов. Исходный вариант участвует в финале, если проходит предварительные проверки. Среднее, медиана и диапазон относятся к успешным замерам одного направления на speed.cloudflare.com. Это быстрая сравнительная оценка через отдельный тестовый туннель, а не предел скорости ПК и не подтверждение длительной стабильности. Близкие или неполные результаты не получают рекомендацию. Для применения нужны три круга сервисов и три подтверждения WARP без обрывов.'),
+            E('p',{},'За быстрый подбор — до 480 МиБ трафика, за длительный — до 960 МиБ. Файлы не сохраняются; одновременно работают не более трёх небольших запросов сервисов. При ограничении сервера скорости замеры прекращаются. Нагрузка может временно замедлить интернет. HTTP 401/403/429 не подтверждают работу сервиса. После применения проверьте нужные сайты; для проверки обрывов используйте отдельный длительный тест.'),
             E('p',{},'Исходный вариант отмечен в таблице; остальные сравниваются с ним. MTU и маскирующее имя в этом подборе не перебираются. Применение выбранного варианта может кратко прервать WARP; при неудачной проверке прежний вариант возвращается.')
         ]);
     },
@@ -102,10 +103,11 @@ return view.extend({
         return autoStatusRPC().then(s=>{
             const running=['running','stopping'].includes(s.state);
             const labels={idle:'Подбор ещё не запускался',running:'Подбор идёт',stopping:'Останавливается',complete:'Подбор завершён',stopped:'Подбор остановлен',interrupted:'Подбор прерван',changed:'Рабочая конфигурация изменилась',error:'Подбор завершился с ошибкой'};
-            this.autoProgress.textContent=(labels[s.state]||s.state)+(s.minutes?' · вариант '+(s.current||0)+' из 6 · '+Math.floor((s.elapsed||0)/60)+' из '+s.minutes+' мин':'')+(s.reason?' · '+message(s.reason):'')+(s.speed_limited?' · Сервер скорости ограничил запросы (429). Замеры остановлены; скорость не участвует в рейтинге, рекомендация не выставляется.':'');
+            const assessment={insufficient:'Недостаточно повторов для уверенного выбора',close:'Результаты сопоставимы: явного преимущества нет',advantage:'Есть преимущество в выполненных замерах',limited:'Скорость не оценена: ограничение тестового сервера'};
+            this.autoProgress.textContent=(labels[s.state]||s.state)+(s.minutes?' · вариант '+(s.current||0)+' из 6 · '+Math.floor((s.elapsed||0)/60)+' из '+s.minutes+' мин':'')+(s.phase==='screening'?' · предварительный отбор':s.phase==='finalists'?' · повторная проверка финалистов':'')+(s.state==='complete'?' · '+(assessment[s.assessment]||''):'')+(s.minutes===5?' · быстрая оценка':'')+(s.reason?' · '+message(s.reason):'')+(s.speed_limited?' · Сервер скорости ограничил запросы (429). Замеры остановлены; скорость не участвует в рейтинге, рекомендация не выставляется.':'');
             this.autoStart.disabled=running||!!this.autoPending;this.autoStop.disabled=!running||!!this.autoPending;this.autoDuration.disabled=running;
             this.autoChoices.forEach(c=>{c.disabled=running;if(running)c.checked=(','+s.selection+',').includes(','+c.value+',');});
-            const cols=['Вариант','Доступность','Обрывы WARP',s.speed_metric==='mean_v1'?'Средняя загрузка':'Загрузка (старый замер)',s.speed_metric==='mean_v1'?'Средняя отдача':'Отдача (старый замер)','Задержка 95%','Действие'];
+            const cols=['Вариант','Доступность','Обрывы WARP',['mean_v1','mean_v2'].includes(s.speed_metric)?'Средняя загрузка':'Загрузка (старый замер)',['mean_v1','mean_v2'].includes(s.speed_metric)?'Средняя отдача':'Отдача (старый замер)','Задержка 95%','Действие'];
             this.autoHead.replaceChildren(...cols.map(t=>E('th',{},t)));
             this.autoRows.replaceChildren(...(s.candidates||[]).map((c,index)=>{
                 const eligible=s.state==='complete'&&c.checks>=3&&c.failures===0&&c.rounds>=3&&c.good>0;
@@ -119,7 +121,8 @@ return view.extend({
                 ]);
                 details.addEventListener('toggle',()=>{if(details.open)this.autoExpanded.add(c.id);else this.autoExpanded.delete(c.id);});
                 const availability=E('div',{},[E('span',{},c.total?c.good+' / '+c.total+' · ограничений '+c.restricted+' · ошибок '+c.errors:message(c.note)),...(c.total?[details]:[])]);
-                const values=[(index+1)+'. '+(c.recommended?'Рекомендуется · ':'')+c.endpoint+' · пакетов '+c.jc+(c.id===1?' (исходный)':''),availability,c.checks?c.failures+' / '+c.checks:'Нет проверок',(c.speed>0?(c.speed*8/1000000).toFixed(2)+' Мбит/с'+(c.speed_samples!=null?' · замеров '+c.speed_samples+'/2':''):'Нет замера'),(c.upload_speed>0?(c.upload_speed*8/1000000).toFixed(2)+' Мбит/с · замеров '+c.upload_samples+'/2':'Нет замера'),c.p95+' мс',apply];
+                const spread=(prefix)=>c[prefix+'_median']>0?' · медиана '+(c[prefix+'_median']*8/1e6).toFixed(1)+' · диапазон '+(c[prefix+'_min']*8/1e6).toFixed(1)+'–'+(c[prefix+'_max']*8/1e6).toFixed(1)+' Мбит/с':'';
+                const values=[(index+1)+'. '+(c.recommended?'Рекомендуется · ':'')+c.endpoint+' · пакетов '+c.jc+(c.id===1?' (исходный)':''),availability,c.checks?c.failures+' / '+c.checks:'Нет проверок',(c.speed>0?(c.speed*8/1000000).toFixed(2)+' Мбит/с'+(c.speed_samples!=null?' · замеров '+c.speed_samples+'/'+(s.speed_target||2):'')+spread('download'):'Нет замера'),(c.upload_speed>0?(c.upload_speed*8/1000000).toFixed(2)+' Мбит/с · замеров '+c.upload_samples+'/'+(s.speed_target||2)+spread('upload'):'Нет замера'),c.p95+' мс',apply];
                 return E('tr',{},values.map((v,i)=>E('td',{'data-label':cols[i]},v)));
             }));
         }).catch(()=>{});
