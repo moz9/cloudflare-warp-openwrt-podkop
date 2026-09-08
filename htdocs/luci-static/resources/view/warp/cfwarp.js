@@ -85,9 +85,9 @@ return view.extend({
             E('div',{style:'display:flex;flex-wrap:wrap;gap:12px'},[this.autoDuration,this.autoStart,this.autoStop]),
             this.autoProgress,
             E('div',{style:'overflow-x:auto'},E('table',{class:'table warp-test-table'},[
-                E('thead',{},E('tr',{},['Вариант','Доступность','Обрывы WARP','Скорость','Задержка 95%','Действие'].map(t=>E('th',{},t)))),this.autoRows
+                E('thead',{},E('tr',{},['Вариант','Доступность','Обрывы WARP','Загрузка','Отдача','Задержка 95%','Действие'].map(t=>E('th',{},t)))),this.autoRows
             ])),
-            E('p',{},'Рейтинг учитывает успешные ответы выбранных сервисов, ошибки, затем скорость и задержку. Для применения нужны минимум три круга и подтверждения WARP без обрывов. 403 не считается успехом. Скорость — ориентир по двум файлам по 1 МиБ на вариант (до 12 МиБ за подбор), не предел канала и не скорость YouTube.'),
+            E('p',{},'Рейтинг учитывает успешные ответы выбранных сервисов, ошибки, затем скорость и задержку. Для применения нужны минимум три круга и подтверждения WARP без обрывов. 403 не считается успехом. Загрузка и отдача — более низкие результаты двух замеров через тестовый WARP: до 64 МиБ скачивания и 16 МиБ отправки за замер, до 8 секунд на направление. До 960 МиБ за подбор; нагрузка может временно замедлить интернет. Это один поток: результат не равен многопоточному Speedtest, скорости тарифа или YouTube. При одном замере оценка предварительная.'),
             E('p',{},'Исходный вариант отмечен в таблице; остальные сравниваются с ним. MTU и маскирующее имя в этом подборе не перебираются. Применение выбранного варианта может кратко прервать WARP; при неудачной проверке прежний вариант возвращается.')
         ]);
     },
@@ -105,7 +105,7 @@ return view.extend({
             this.autoProgress.textContent=(labels[s.state]||s.state)+(s.minutes?' · вариант '+(s.current||0)+' из 6 · '+Math.floor((s.elapsed||0)/60)+' из '+s.minutes+' мин':'')+(s.reason?' · '+message(s.reason):'');
             this.autoStart.disabled=running||!!this.autoPending;this.autoStop.disabled=!running||!!this.autoPending;this.autoDuration.disabled=running;
             this.autoChoices.forEach(c=>{c.disabled=running;if(running)c.checked=(','+s.selection+',').includes(','+c.value+',');});
-            const cols=['Вариант','Доступность','Обрывы WARP','Скорость','Задержка 95%','Действие'];
+            const cols=['Вариант','Доступность','Обрывы WARP','Загрузка','Отдача','Задержка 95%','Действие'];
             this.autoRows.replaceChildren(...(s.candidates||[]).map((c,index)=>{
                 const eligible=s.state==='complete'&&c.checks>=3&&c.failures===0&&c.rounds>=3&&c.good>0;
                 const apply=E('button',{class:'btn',click:()=>this.autoAction(()=>autoApplyRPC(c.id))},'Применить');
@@ -118,7 +118,7 @@ return view.extend({
                 ]);
                 details.addEventListener('toggle',()=>{if(details.open)this.autoExpanded.add(c.id);else this.autoExpanded.delete(c.id);});
                 const availability=E('div',{},[E('span',{},c.total?c.good+' / '+c.total+' · ограничений '+c.restricted+' · ошибок '+c.errors:message(c.note)),...(c.total?[details]:[])]);
-                const values=[(index+1)+'. '+c.endpoint+' · пакетов '+c.jc+(c.id===1?' (исходный)':''),availability,c.checks?c.failures+' / '+c.checks:'Нет проверок',(c.speed*8/1000000).toFixed(2)+' Мбит/с',c.p95+' мс',apply];
+                const values=[(index+1)+'. '+c.endpoint+' · пакетов '+c.jc+(c.id===1?' (исходный)':''),availability,c.checks?c.failures+' / '+c.checks:'Нет проверок',(c.speed>0?(c.speed*8/1000000).toFixed(2)+' Мбит/с'+(c.speed_samples!=null?' · замеров '+c.speed_samples+'/2':''):'Нет замера'),(c.upload_speed>0?(c.upload_speed*8/1000000).toFixed(2)+' Мбит/с · замеров '+c.upload_samples+'/2':'Нет замера'),c.p95+' мс',apply];
                 return E('tr',{},values.map((v,i)=>E('td',{'data-label':cols[i]},v)));
             }));
         }).catch(()=>{});

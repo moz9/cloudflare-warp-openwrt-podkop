@@ -18,7 +18,7 @@ put state running; put reason ''; put selection google,youtube
 put minutes 15; put elapsed 10; put started_at 1; put current 1
 candidate=1; candidate_ep=162.159.192.55:2408; candidate_jc=6
 checks=3; failures=0; rounds=3
-: > "$WORK/samples"; printf '1000000\n' > "$WORK/speeds"
+: > "$WORK/uploads"; : > "$WORK/samples"; printf '1000000\n' > "$WORK/speeds"
 for n in 1 2 3 4 5 6 7 8 9 10 11 12; do echo 'google|ok|500|0|204|0' >> "$WORK/samples"; done
 : > "$WORK/results"
 record_candidate

@@ -5,6 +5,8 @@
 ```sh
 python tests/test_ipk.py
 python tests/test_apk.py
+python tests/test_speed.py
+python tests/test_autotune.py
 node --test tests/test_installer.cjs tests/test_setup.cjs
 python tests/test_stability.py
 sh tests/test_concurrency.sh "$PWD/root/usr/libexec/warp-common"
