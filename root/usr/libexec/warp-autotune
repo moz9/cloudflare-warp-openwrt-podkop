@@ -31,6 +31,7 @@ snapshot_auto() (
     json_init; json_add_boolean ok 1
     for key in state reason selection speed_metric; do json_add_string "$key" "$(get "$key")"; done
     for key in minutes elapsed started_at current; do json_add_int "$key" "$(get "$key")"; done
+    json_add_boolean speed_limited "$([ -e "$WORK/speed-limited" ] && echo 1 || echo 0)"
     json_add_array candidates
     if [ -s "$WORK/ranked" ]; then
         while IFS='|' read -r cid ep jc total good restricted errors p95 speed checks failures rounds upload down_count up_count; do
@@ -50,7 +51,7 @@ snapshot_auto() (
             json_add_int upload_samples "${up_count:-0}"
             json_add_int upload_speed "${upload:-0}"
             recommended=0
-            if [ "$(get state)" = complete ] && [ "$cid" = "$(head -n 1 "$WORK/ranked" | cut -d'|' -f1)" ] &&
+            if [ ! -e "$WORK/speed-limited" ] && [ "$(get state)" = complete ] && [ "$cid" = "$(head -n 1 "$WORK/ranked" | cut -d'|' -f1)" ] &&
                 [ "$checks" -ge 3 ] && [ "$failures" = 0 ] && [ "$rounds" -ge 3 ] && [ "$good" -gt 0 ] &&
                 [ "${down_count:-0}" -ge 2 ] && [ "${up_count:-0}" -ge 2 ]; then recommended=1; fi
             json_add_boolean recommended "$recommended"
@@ -73,10 +74,10 @@ snapshot_auto() (
 )
 rank_results() {
     # Availability precedes throughput. Never reward a fast failed/blocked request.
-    awk -F'|' '{
+    awk -F'|' -v limited="$([ -e "$WORK/speed-limited" ] && echo 1 || echo 0)" '{
         eligible=($11==0 && $10>=3 && $12>=3 && $5>0);
         coverage=($4 ? $5/$4 : 0); reliability=($4 ? 1-$7/$4 : 0);
-        measured=($14>=2 && $15>=2);
+        measured=(!limited && $14>=2 && $15>=2);
         speed=(measured ? sqrt($9*$13) : 0);
         speed=(speed<999999999 ? speed : 999999999); latency=999999999-$8;
         printf "%d%07d%07d%d%09d%09d|%s\n",eligible,coverage*1000000,reliability*1000000,measured,speed,latency,$0
@@ -84,11 +85,13 @@ rank_results() {
 }
 # Two bounded single-stream samples; payload is discarded, never buffered in RAM.
 speed_sample() {
+    [ ! -e "$WORK/speed-limited" ] || return 0
     remaining && [ "$left" -ge 8 ] || return 0
     speed_rc=0
     measurement=$(probe_curl -4fsS --connect-timeout 4 --max-time 8 --max-filesize 67108864 --output /dev/null \
         --write-out '%{http_code}|%{size_download}|%{speed_download}|%{time_total}' \
         'https://speed.cloudflare.com/__down?bytes=67108864' 2>/dev/null) || speed_rc=$?
+    case "$measurement" in 429\|*) touch "$WORK/speed-limited"; return 0;; esac
     # A timed sample is valid only when data flowed for the entire time budget.
     # TLS/DNS failures, short disconnects and HTTP errors are never speed samples.
     printf '%s\n' "$measurement" | awk -F'|' -v rc="$speed_rc" '
@@ -101,6 +104,7 @@ speed_sample() {
         --request POST --upload-file - --header 'Transfer-Encoding:' --header 'Content-Length: 16777216' --header 'Expect:' \
         --output /dev/null --write-out '%{http_code}|%{size_upload}|%{speed_upload}|%{time_total}' \
         'https://speed.cloudflare.com/__up' 2>/dev/null) || speed_rc=$?
+    case "$measurement" in 429\|*) touch "$WORK/speed-limited"; return 0;; esac
     printf '%s\n' "$measurement" | awk -F'|' -v rc="$speed_rc" '
         NF==4 && $2>=1048576 && $2<=16777216 && $3>0 &&
         ((rc==0 && $1==200 && $2==16777216) || (rc==28 && $1==200 && $4>=7.5)) {printf "%.0f\n",$3}' >> "$WORK/uploads"
@@ -111,7 +115,7 @@ clear_previous_samples() {
     for old_id in 1 2 3 4 5 6; do
         rm -f "$WORK/samples-$old_id" "$WORK/speeds-$old_id" "$WORK/uploads-$old_id" "$WORK/note-$old_id"
     done
-    for old_file in samples speeds uploads candidate.score service-score.tmp register.log precheck.log proxy.log; do
+    for old_file in speed-limited samples speeds uploads candidate.score service-score.tmp register.log precheck.log proxy.log; do
         rm -f "$WORK/$old_file"
     done
 }

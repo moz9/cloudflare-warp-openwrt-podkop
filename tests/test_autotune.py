@@ -6,17 +6,22 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = (ROOT / 'root/usr/libexec/warp-autotune').read_text()
-PROGRAM = re.search(r"awk -F'\|' '(.*?)' \"\$WORK/results\"", SOURCE, re.S).group(1)
+PROGRAM = re.search(r"awk -F'\|'[^\n]*? '(.*?)' \"\$WORK/results\"", SOURCE, re.S).group(1)
 AWK = shutil.which('awk') or r'C:\Program Files\Git\usr\bin\awk.exe'
 
 
-def rank(rows):
-    result = subprocess.run([AWK, '-F|', PROGRAM], input='\n'.join(rows)+'\n',
+def rank(rows, limited=False):
+    result = subprocess.run([AWK, '-F|', '-v', 'limited='+str(int(limited)), PROGRAM], input='\n'.join(rows)+'\n',
                             text=True, capture_output=True, check=True)
     return [line.split('|')[1] for line in sorted(result.stdout.splitlines(), reverse=True)]
 
 
 class AutotuneRankingTests(unittest.TestCase):
+    def test_server_limit_removes_speed_advantage(self):
+        self.assertEqual(rank([
+            '1|ep|6|12|12|0|0|500|90000000|3|0|3|90000000|2|2',
+            '2|ep|12|12|12|0|0|100|1000000|3|0|3|1000000|2|2'], limited=True)[0], '2')
+
     def test_balanced_throughput_beats_download_only_peak(self):
         self.assertEqual(rank([
             '1|ep|6|12|12|0|0|500|10000000|3|0|3|10000000|2|2',

@@ -9,7 +9,7 @@ DISABLED_FILE="$STATE_DIR/disabled"
 FORCE_START_FILE="/tmp/warp-force-start"
 
 start_service() {
-	local auto_start backend interface_name
+	local auto_start backend interface_name worker_threads
 
 	[ ! -e "$DISABLED_FILE" ] || return 0
 
@@ -23,6 +23,8 @@ start_service() {
 	[ -s "$STATE_DIR/awg-account.json" ] || return 0
 	[ -s "$STATE_DIR/awg.conf" ] || return 0
 
+	config_get worker_threads main worker_threads 1
+	case "$worker_threads" in 1|2) ;; *) worker_threads=1 ;; esac
 	procd_open_instance warp
 	procd_set_param command /usr/libexec/warp-awg-runner "$interface_name"
 	procd_set_param file "$STATE_DIR/awg-account.json" "$STATE_DIR/awg.conf"
@@ -30,7 +32,7 @@ start_service() {
 	procd_set_param stderr 1
 	# Keep the userspace tunnel from competing for all router memory under a
 	# burst. This is a soft Go heap limit; packet forwarding remains continuous.
-	procd_set_param env GOMEMLIMIT=40MiB GOMAXPROCS=1 WG_PROCESS_FOREGROUND=1
+	procd_set_param env GOMEMLIMIT=40MiB GOMAXPROCS="$worker_threads" WG_PROCESS_FOREGROUND=1
 	procd_set_param term_timeout 10
 	procd_set_param respawn 3600 5 5
 	procd_close_instance

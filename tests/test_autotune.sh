@@ -37,3 +37,11 @@ clear_previous_samples
 [ -e "$WORK/unrelated" ] && [ -e "$WORK/baseline.conf" ]
 [ ! -e "$WORK/note-6" ] && [ ! -e "$WORK/samples-6" ] && [ ! -e "$WORK/speeds-6" ] && [ ! -e "$WORK/uploads-6" ]
 echo PASS_means_recommendation_and_owned_cleanup
+
+touch "$WORK/speed-limited"
+snapshot_auto
+[ "$(jsonfilter -i "$WORK/status.json" -e '@.speed_limited')" = true ]
+[ "$(jsonfilter -i "$WORK/status.json" -e '@.candidates[0].recommended')" = false ]
+clear_previous_samples
+[ ! -e "$WORK/speed-limited" ]
+echo PASS_rate_limit_suppresses_recommendation

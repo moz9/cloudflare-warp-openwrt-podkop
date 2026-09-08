@@ -102,7 +102,7 @@ return view.extend({
         return autoStatusRPC().then(s=>{
             const running=['running','stopping'].includes(s.state);
             const labels={idle:'Подбор ещё не запускался',running:'Подбор идёт',stopping:'Останавливается',complete:'Подбор завершён',stopped:'Подбор остановлен',interrupted:'Подбор прерван',changed:'Рабочая конфигурация изменилась',error:'Подбор завершился с ошибкой'};
-            this.autoProgress.textContent=(labels[s.state]||s.state)+(s.minutes?' · вариант '+(s.current||0)+' из 6 · '+Math.floor((s.elapsed||0)/60)+' из '+s.minutes+' мин':'')+(s.reason?' · '+message(s.reason):'');
+            this.autoProgress.textContent=(labels[s.state]||s.state)+(s.minutes?' · вариант '+(s.current||0)+' из 6 · '+Math.floor((s.elapsed||0)/60)+' из '+s.minutes+' мин':'')+(s.reason?' · '+message(s.reason):'')+(s.speed_limited?' · Сервер скорости ограничил запросы (429). Замеры остановлены; скорость не участвует в рейтинге, рекомендация не выставляется.':'');
             this.autoStart.disabled=running||!!this.autoPending;this.autoStop.disabled=!running||!!this.autoPending;this.autoDuration.disabled=running;
             this.autoChoices.forEach(c=>{c.disabled=running;if(running)c.checked=(','+s.selection+',').includes(','+c.value+',');});
             const cols=['Вариант','Доступность','Обрывы WARP',s.speed_metric==='mean_v1'?'Средняя загрузка':'Загрузка (старый замер)',s.speed_metric==='mean_v1'?'Средняя отдача':'Отдача (старый замер)','Задержка 95%','Действие'];

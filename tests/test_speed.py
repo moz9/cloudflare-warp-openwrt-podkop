@@ -20,6 +20,14 @@ class SpeedTests(unittest.TestCase):
             result = subprocess.run([SHELL, '-c', script], cwd=tmp, text=True, capture_output=True, check=True)
             return result.stdout.strip()
 
+    def test_rate_limit_stops_followup_requests(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            script = FUNCTION + "\nWORK=.\nremaining() { left=8; }\n"
+            script += "probe_curl() { echo called >> calls; echo '429|0|0|0.2'; return 22; }\n"
+            script += 'speed_sample\nspeed_sample\ntest -e speed-limited\nwc -l < calls\n'
+            result = subprocess.run([SHELL, '-c', script], cwd=tmp, text=True, capture_output=True, check=True)
+            self.assertEqual(result.stdout.strip(), '1')
+
     def test_complete_download(self):
         self.assertEqual(self.sample('200|67108864|33554432|2.0'), '33554432')
     def test_full_time_budget(self):
