@@ -52,7 +52,7 @@ prepare_zerotier() (
           .settings = (.settings // {}) |
           if (.settings|type) != "object" then error("invalid settings") else . end |
           if ((.settings.interfacePrefixBlacklist // [])|type) != "array" then error("invalid blacklist") else . end |
-          .settings.interfacePrefixBlacklist = ((.settings.interfacePrefixBlacklist // []) + [$prefix] | unique)
+          .settings.interfacePrefixBlacklist = ((.settings.interfacePrefixBlacklist // []) + [$prefix, "warp", "cfwarp"] | unique)
         ' "$file" > "$ztdir/$n.new" || fail 'Invalid ZeroTier configuration; no files changed'
         if [ "$(jq -cS . "$file")" != "$(jq -cS . "$ztdir/$n.new")" ]; then changed=1; fi
     done

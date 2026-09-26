@@ -67,12 +67,12 @@ const autoMethods = {
     autotune_stop: { call: function() { return autoRun('stop'); } },
     autotune_apply: { args: { candidate: 0 }, call: function(request) {
         const c=request.args.candidate;
-        if (c < 1 || c > 6 || int(c) != c) return {ok:false,code:'invalid_candidate'};
+        if (type(c) != 'int' || c < 1 || c > 6 || int(c) != c) return {ok:false,code:'invalid_candidate'};
         return autoRun('apply ' + c);
     } },
     autotune_start: { args: { minutes:15, services:'' }, call: function(request) {
         const m=request.args.minutes, s=request.args.services;
-        if (m != 5 && m != 15 && m != 30 && m != 45 && m != 60) return {ok:false,code:'invalid_duration'};
+        if (type(m) != 'int' || (m != 5 && m != 15 && m != 30 && m != 45 && m != 60)) return {ok:false,code:'invalid_duration'};
         if (type(s) != 'string' || length(s)>128 || !match(s,/^[a-z_,]+$/)) return {ok:false,code:'invalid_selection'};
         return autoRun('start ' + m + ' ' + s);
     } }
@@ -86,7 +86,7 @@ const methods = {
         call: function(request) {
             const m = request.args.minutes;
             const s = request.args.services;
-            if (m != 15 && m != 30 && m != 45 && m != 60)
+            if (type(m) != 'int' || (m != 15 && m != 30 && m != 45 && m != 60))
                 return { ok: false, code: 'invalid_duration' };
             if (type(s) != 'string' || length(s) > 128 || !match(s, /^[a-z_,]+$/))
                 return { ok: false, code: 'invalid_selection' };

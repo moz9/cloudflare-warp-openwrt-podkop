@@ -169,6 +169,7 @@ valid_node_list() {
 }
 
 validate_settings() {
+	SETTINGS_ERROR=
 	CFG_AUTO=$(cfg_get auto_start 1)
 	CFG_INTERFACE=$(cfg_get interface warp)
 	CFG_MTU=$(cfg_get mtu 1280)
@@ -181,17 +182,17 @@ validate_settings() {
 	CFG_STORED_BACKEND=$(cfg_get actual_backend '')
 	CFG_BACKEND=$CFG_STORED_BACKEND
 
-	valid_flag "$CFG_AUTO" || emit_error 'invalid_auto_start'
-	valid_uci_name "$CFG_INTERFACE" || emit_error 'invalid_interface_name'
-	valid_uint_range "$CFG_MTU" 576 1420 || emit_error 'invalid_mtu'
-	valid_uint_range "$CFG_KEEPALIVE" 0 65535 || emit_error 'invalid_keepalive'
-	valid_hostname "$CFG_SNI" || emit_error 'invalid_sni'
-	valid_country_list "$CFG_EXCLUDE_COUNTRIES" || emit_error 'invalid_excluded_countries'
-	valid_node_list "$CFG_EXCLUDE_NODES" || emit_error 'invalid_excluded_nodes'
-	valid_uint_range "$CFG_SCAN_SAMPLE" 1 256 || emit_error 'invalid_scan_sample'
-	valid_uint_range "$SCOUT_JOBS" 1 4 || emit_error 'invalid_scan_workers'
-	[ -z "$CFG_ACTUAL" ] || valid_uci_name "$CFG_ACTUAL" || emit_error 'invalid_managed_interface'
-	[ -z "$CFG_STORED_BACKEND" ] || printf '%s' "$CFG_STORED_BACKEND" | grep -Eq '^[A-Za-z0-9_-]{1,32}$' || emit_error 'invalid_backend'
+	valid_flag "$CFG_AUTO" || { SETTINGS_ERROR='invalid_auto_start'; return 1; }
+	valid_uci_name "$CFG_INTERFACE" || { SETTINGS_ERROR='invalid_interface_name'; return 1; }
+	valid_uint_range "$CFG_MTU" 576 1420 || { SETTINGS_ERROR='invalid_mtu'; return 1; }
+	valid_uint_range "$CFG_KEEPALIVE" 0 65535 || { SETTINGS_ERROR='invalid_keepalive'; return 1; }
+	valid_hostname "$CFG_SNI" || { SETTINGS_ERROR='invalid_sni'; return 1; }
+	valid_country_list "$CFG_EXCLUDE_COUNTRIES" || { SETTINGS_ERROR='invalid_excluded_countries'; return 1; }
+	valid_node_list "$CFG_EXCLUDE_NODES" || { SETTINGS_ERROR='invalid_excluded_nodes'; return 1; }
+	valid_uint_range "$CFG_SCAN_SAMPLE" 1 256 || { SETTINGS_ERROR='invalid_scan_sample'; return 1; }
+	valid_uint_range "$SCOUT_JOBS" 1 4 || { SETTINGS_ERROR='invalid_scan_workers'; return 1; }
+	[ -z "$CFG_ACTUAL" ] || valid_uci_name "$CFG_ACTUAL" || { SETTINGS_ERROR='invalid_managed_interface'; return 1; }
+	[ -z "$CFG_STORED_BACKEND" ] || printf '%s' "$CFG_STORED_BACKEND" | grep -Eq '^[A-Za-z0-9_-]{1,32}$' || { SETTINGS_ERROR='invalid_backend'; return 1; }
 	case "$CFG_BACKEND" in ''|amneziawg) ;; *) CFG_BACKEND= ;; esac
 }
 
@@ -707,7 +708,7 @@ connect_tunnel() {
 		START_WATCHDOG=0
 	}
 	require_dependencies
-	validate_settings
+	validate_settings || emit_error "$SETTINGS_ERROR"
 	mkdir -p "$STATE_DIR" 2>/dev/null || emit_error 'state_directory_failed'
 	chmod 700 "$STATE_DIR" || emit_error 'state_directory_failed'
 	: >"$BACKEND_LOG" || emit_error 'state_write_failed'
@@ -760,7 +761,7 @@ do_recover() {
 	STOP_WATCHDOG=0
 	START_WATCHDOG=0
 	require_runtime_dependencies
-	validate_settings
+	validate_settings || emit_error "$SETTINGS_ERROR"
 	account_valid || emit_error 'invalid_awg_account'
 	awg_config_valid || emit_error 'invalid_awg_config'
 	[ -n "$CFG_ACTUAL" ] && interface_owned "$CFG_ACTUAL" || emit_error 'managed_interface_missing'
@@ -774,7 +775,7 @@ do_recover() {
 
 do_disable() {
 	acquire_lock
-	validate_settings
+	validate_settings || emit_error "$SETTINGS_ERROR"
 	[ -n "$CFG_ACTUAL" ] && interface_owned "$CFG_ACTUAL" || emit_error 'managed_interface_missing'
 	set_interface_auto "$CFG_ACTUAL" 0
 	$IFDOWN_BIN "$CFG_ACTUAL" >/dev/null 2>&1 || true
@@ -788,9 +789,17 @@ do_disable() {
 do_unregister() {
 	acquire_lock
 	require_dependencies
-	validate_settings
+	validate_settings || emit_error "$SETTINGS_ERROR"
 	if [ -n "$CFG_ACTUAL" ] && $UCI_BIN -q show podkop 2>/dev/null | grep -q "\\.interface='$CFG_ACTUAL'$"; then
 		emit_error 'podkop_section_attached'
+	fi
+	# Revoke the separate autotune registration before removing its credentials.
+	# Keep the file on API failure so the operation can be retried.
+	if [ -e "$STATE_DIR/autotune-account.json" ]; then
+		api_error=$($API_BIN unregister "$STATE_DIR/autotune-account.json" '' 2>&1 >/dev/null)
+		api_rc=$?
+		[ "$api_rc" -eq 0 ] || emit_error "${api_error:-unregister_failed}"
+		rm -f -- "$STATE_DIR/autotune-account.json" || emit_error 'state_write_failed'
 	fi
 	if [ -e "$ACCOUNT_FILE" ]; then
 		account_valid || emit_error 'invalid_awg_account'
@@ -806,12 +815,12 @@ do_unregister() {
 	clear_actual_state
 	$UBUS_BIN call network reload '{}' >/dev/null 2>&1 || emit_error 'network_reload_failed'
 	rm -f -- "$ACCOUNT_FILE" "$AWG_CONFIG" "$BACKEND_LOG" "$DISABLED_FILE" "$LAST_ERROR" \
-		"$STATE_DIR/last_recovery"
+		"$STATE_DIR/last_recovery" "$STATE_DIR/autotune-previous.conf"
 	emit_success 'unregistered' ''
 }
 
 do_status() {
-	validate_settings
+	validate_settings || true
 	state=not_configured
 	registered=false
 	managed=false
@@ -822,7 +831,9 @@ do_status() {
 	rx_bytes=0
 	tx_bytes=0
 
-	if warp_operation_busy; then
+	if [ -n "$SETTINGS_ERROR" ]; then
+		state=error; error_code=$SETTINGS_ERROR
+	elif warp_operation_busy; then
 		state=registering
 	elif [ -e "$ACCOUNT_FILE" ]; then
 		if account_valid; then
@@ -855,7 +866,7 @@ do_status() {
 	for number in "$last_handshake" "$rx_bytes" "$tx_bytes"; do
 		case "$number" in ''|*[!0-9]*) last_handshake=0; rx_bytes=0; tx_bytes=0; break ;; esac
 	done
-	if [ -s "$LAST_ERROR" ]; then
+	if [ -z "$SETTINGS_ERROR" ] && [ -s "$LAST_ERROR" ]; then
 		error_code=$(sed -n '1p' "$LAST_ERROR")
 		[ "$state" = not_configured ] || [ "$state" = registering ] || state=error
 	fi

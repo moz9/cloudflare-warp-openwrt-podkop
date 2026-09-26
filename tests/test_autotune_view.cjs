@@ -3,6 +3,13 @@ const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const path=require('node:path');
 const source=fs.readFileSync(path.join(__dirname,'../htdocs/luci-static/resources/view/warp/cfwarp.js'),'utf8');
+test('masking host validation matches the manager constraints',()=>{
+ const validator=source.match(/o\.validate = (function\(s, v\) \{[^\n]+\});/);
+ assert.ok(validator);
+ const validate=new Function(`return (${validator[1]})`)();
+ for(const host of ['ozon.ru','a-b.example','localhost'])assert.equal(validate(null,host),true);
+ for(const host of ['bad..host','bad_host.example','-bad.example','a'.repeat(254),''])assert.notEqual(validate(null,host),true);
+});
 function E(tag,attrs={},children=[]) {return {tag,attrs,children,replaceChildren(...rows){this.children=rows},addEventListener(){}};}
 test('first render works before status arrives; headings follow old and new results',async()=>{
  let status={state:'idle',candidates:[]};

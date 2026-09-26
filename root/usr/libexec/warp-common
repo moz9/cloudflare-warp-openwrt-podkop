@@ -28,7 +28,7 @@ warp_scout_route_acquire() {
     "$WARP_NFT_BIN" -f - <<EOF || return 1
 add table inet $scout_table
 add chain inet $scout_table output { type route hook output priority -151; policy accept; }
-add rule inet $scout_table output meta mark 0 ip daddr { 8.6.112.0/24, 8.34.70.0/24, 8.34.146.0/24, 8.35.211.0/24, 8.39.125.0/24, 8.39.204.0/24, 8.39.214.0/24, 8.47.69.0/24, 162.159.192.0/24, 162.159.195.0/24, 188.114.96.0/22 } meta l4proto udp meta mark set 0x200000 counter comment "CF WARP direct scan"
+add rule inet $scout_table output meta mark 0 ip daddr { 8.6.112.0/24, 8.34.70.0/24, 8.34.146.0/24, 8.35.211.0/24, 8.39.125.0/24, 8.39.204.0/24, 8.39.214.0/24, 8.47.69.0/24, 162.159.192.0/24, 162.159.193.0/24, 162.159.195.0/24, 188.114.96.0/22 } meta l4proto udp meta mark set 0x200000 counter comment "CF WARP direct scan"
 EOF
     WARP_SCOUT_TABLE=$scout_table
 }

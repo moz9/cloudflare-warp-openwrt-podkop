@@ -16,7 +16,7 @@ API = ROOT / "root/usr/libexec/warp-api"
 RUNNER = ROOT / "root/usr/libexec/warp-awg-runner"
 WATCHDOG = ROOT / "root/usr/libexec/warp-watchdog"
 RPC = ROOT / "root/usr/share/rpcd/ucode/warp.uc"
-FRONTEND = ROOT / "htdocs/luci-static/resources/view/warp/overview.js"
+FRONTEND = ROOT / "htdocs/luci-static/resources/view/warp/cfwarp.js"
 AWG_CTL = ROOT / "warp-awg/files/warp-awgctl.c"
 
 
@@ -188,14 +188,14 @@ PersistentKeepalive = 25
         self.assertIn("--proto awg", manager)
         self.assertIn("--gen-i1 quic", manager)
         self.assertIn('--tunnel-jobs "$SCOUT_JOBS"', manager)
-        self.assertIn('SCOUT_JOBS="${WARP_SCOUT_JOBS:-2}"', manager)
+        self.assertIn('SCOUT_JOBS="${WARP_SCOUT_JOBS:-1}"', manager)
         self.assertIn("SCOUT_FAST_TARGETS='162.159.192.0/24,188.114.96.0/24,188.114.97.0/24'", manager)
         self.assertIn("SCOUT_PING_TARGET='8.8.8.8'", manager)
         self.assertIn('if [ "$CFG_SCAN_SAMPLE" -gt 1 ]', manager)
         self.assertNotIn("INITIAL_SCAN", manager)
         self.assertIn('run_endpoint_scan 1 "$SCOUT_FAST_TARGETS"', manager)
         self.assertIn('run_endpoint_scan "$CFG_SCAN_SAMPLE"', manager)
-        self.assertIn('GOMAXPROCS=1 NO_COLOR=1 "$SCOUT_BIN"', manager)
+        self.assertIn('GOMAXPROCS=1 GOMEMLIMIT=24MiB NO_COLOR=1 /usr/libexec/warp-limit', manager)
         self.assertIn("--tun-ping-count 10", manager)
         self.assertIn('--ping-target "$SCOUT_PING_TARGET"', manager)
         self.assertIn("--exclude-country", manager)
@@ -220,7 +220,7 @@ PersistentKeepalive = 25
         # The Linux UDP GRO path reserves one slot per group of 64 datagrams.
         # A smaller batch produces an empty ReadBatch slice and panics.
         self.assertGreaterEqual(int(batch_size.group(1)), 64)
-        self.assertIn("GOMEMLIMIT=48MiB", init)
+        self.assertIn("GOMEMLIMIT=40MiB", init)
         self.assertIn("WG_PROCESS_FOREGROUND=1", init)
         self.assertIn("PKG_VERSION:=0.16.0", scout_package)
         self.assertIn("PKG_HASH:=c21c777239856401f6529e4e2503d9f6ebd9071f78988fe86e35aaefc65a1c20", scout_package)
@@ -276,7 +276,7 @@ PersistentKeepalive = 25
         grant = acl["luci-app-warp"]
         self.assertEqual(grant["read"]["uci"], ["warp"])
         self.assertEqual(grant["write"]["uci"], ["warp"])
-        self.assertEqual(grant["read"]["ubus"]["luci.warp"], ["status"])
+        self.assertEqual(grant["read"]["ubus"]["luci.warp"], ["status", "test_status", "autotune_status"])
         self.assertNotIn("file", grant["write"])
 
     def test_frontend_does_not_request_secrets(self):
@@ -300,23 +300,18 @@ PersistentKeepalive = 25
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
         self.assertIn("LUCI_PKGARCH:=all", makefile)
         self.assertIn("LUCI_NAME:=luci-app-warp", makefile)
-        self.assertIn("warp-awg (>=3.1.20260828-r3)", makefile)
-        self.assertIn("warp-warpscout (>=0.16.0-r1)", makefile)
+        self.assertIn("warp-awg (>=0.1.0)", makefile)
+        self.assertIn("warp-warpscout (>=0.1.0)", makefile)
         self.assertIn("LUCI_DEPENDS:=+luci-base +curl +jsonfilter", makefile)
         for unwanted in ["+wireguard-tools", "+sing-box", "+kmod-wireguard", "+luci-proto-wireguard", "firewall4", "pbr"]:
             self.assertNotIn(unwanted, makefile)
 
     def test_installer_selects_supported_arm64_packages(self):
-        installer = (ROOT / "install.sh").read_text(encoding="utf-8")
-        self.assertIn("aarch64|aarch64_cortex-a53)", installer)
-        self.assertIn('LUCI_PACKAGE="luci-app-warp-3.0.0-r6.apk"', installer)
-        self.assertIn('AWG_PACKAGE="warp-awg-3.1.20260828-r3-$ARCH.apk"', installer)
-        self.assertIn('SCOUT_PACKAGE="warp-warpscout-0.16.0-r1-$ARCH.apk"', installer)
-        self.assertIn('result=$(/usr/libexec/warp-manager enable)', installer)
-        self.assertIn("DISTRIB_ARCH", installer)
-        self.assertIn("OPENWRT_ARCH", installer)
-        self.assertIn('RELEASE_TAG="v3.0.0"', installer)
-        self.assertIn('uci set warp.main.sni="$MASKING_SNI"', installer)
+        installer = (ROOT / "install-podkop.sh").read_text(encoding="utf-8")
+        self.assertIn("aarch64", installer)
+        self.assertIn("sha256sum -c", installer)
+        self.assertIn("warp-setup", installer)
+        self.assertEqual((ROOT / "install.sh").read_bytes(), (ROOT / "i").read_bytes())
 
 
 if __name__ == "__main__":
