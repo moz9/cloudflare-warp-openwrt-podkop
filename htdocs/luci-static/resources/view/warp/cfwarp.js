@@ -257,6 +257,7 @@ return view.extend({
         o = section.option(form.Value, 'sni', 'Маскирующее имя');
         o.description = 'Имя в первом маскирующем пакете AWG. Не выбирает страну выхода.';
         o.datatype = 'hostname'; o.rmempty = false;
+        o.validate = function(s, v) { return v && v.length <= 253 && /^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)*[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/.test(v) ? true : 'Укажите корректное имя узла без подчёркиваний и пустых меток.'; };
         o = section.option(form.Value, 'exclude_countries', 'Исключить страны узлов');
         o.description = 'Например RU,BY. Фильтр относится к расположению узла, а не к региону, который определит сайт.';
         o.rmempty = false;

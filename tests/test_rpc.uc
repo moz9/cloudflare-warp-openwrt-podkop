@@ -9,5 +9,8 @@ check(m.test_start.call({args:{minutes:15,services:'youtube;id'}}).code === 'inv
 check(m.test_start.call({args:{minutes:15,services:''}}).code === 'invalid_selection', 'empty selection');
 check(m.autotune_status.call().ok === true, 'autotune status');
 check(m.autotune_apply.call({args:{candidate:7}}).code === 'invalid_candidate', 'candidate whitelist');
+check(m.autotune_apply.call({args:{candidate:'1'}}).code === 'invalid_candidate', 'candidate integer type');
 check(m.autotune_start.call({args:{minutes:15,services:'youtube;id'}}).code === 'invalid_selection', 'autotune injection');
+check(m.autotune_start.call({args:{minutes:'5',services:'youtube'}}).code === 'invalid_duration', 'autotune integer type');
+check(m.test_start.call({args:{minutes:'15',services:'youtube'}}).code === 'invalid_duration', 'test integer type');
 print('PASS: RPC runtime closure and input validation\n');

@@ -2,6 +2,15 @@ const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const fs=require('node:fs'),os=require('node:os'),path=require('node:path');
 const {spawnSync}=require('node:child_process');
+test('ZeroTier excludes every possible WARP interface prefix',()=>{
+ const source=fs.readFileSync(path.join(__dirname,'../root/usr/libexec/warp-setup'),'utf8');
+ const filter=source.match(/jq --arg prefix "\$prefix" '([\s\S]*?)' "\$file"/);
+ assert.ok(filter);
+ const jq=spawnSync('jq',['--arg','prefix','warp',filter[1]],{input:JSON.stringify({settings:{interfacePrefixBlacklist:['zt']}}),encoding:'utf8'});
+ if(jq.error?.code==='ENOENT')return; // jq is installed by CI; Windows host may omit it.
+ assert.equal(jq.status,0,jq.stderr);
+ assert.deepEqual(JSON.parse(jq.stdout).settings.interfacePrefixBlacklist,['cfwarp','warp','zt']);
+});
 function run({configured=false,stopped=false,disabled=false,connectFails=false,podkop=true,foreign=false}={}){
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'warp-setup-'));
  const root=dir.replaceAll('\\','/').replace(/^([A-Za-z]):/,(_,d)=>'/'+d.toLowerCase());

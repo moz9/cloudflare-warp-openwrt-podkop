@@ -1,11 +1,14 @@
 #!/bin/sh
-# Compatibility entry point for the Podkop-specific opkg release.
+# Short public entrypoint. Download completely before executing the installer.
 set -eu
-umask 077
-installer=$(mktemp /tmp/install-cfwarp.XXXXXX)
-trap 'rm -f "$installer"' EXIT
+work=$(mktemp -d /tmp/cfwarp-bootstrap.XXXXXX)
+trap 'rm -rf "$work"' EXIT
 trap 'exit 1' HUP INT TERM
-curl -fsSL --connect-timeout 10 --max-time 30 \
-    https://raw.githubusercontent.com/moz9/cloudflare-warp-openwrt-podkop/main/install-podkop.sh \
-    -o "$installer"
-sh "$installer"
+url=https://raw.githubusercontent.com/moz9/cloudflare-warp-openwrt-podkop/main/install-podkop.sh
+if command -v curl >/dev/null 2>&1; then
+    curl -fsSL --retry 2 --retry-all-errors --retry-delay 1 --connect-timeout 10 --max-time 120 "$url" -o "$work/install.sh"
+else
+    wget -T 120 -qO "$work/install.sh" "$url"
+fi
+sh -n "$work/install.sh"
+sh "$work/install.sh"
